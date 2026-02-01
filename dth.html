@@ -61,7 +61,19 @@ async function api(url,action,params={}){
 }
 
 const fmt=n=>'₱'+(parseFloat(n)||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtDate=d=>d?new Date(d).toLocaleDateString('en-PH',{month:'short',day:'numeric'}):'-';
+const fmtDate=d=>{
+  if(!d)return'-';
+  let date;
+  if(typeof d==='string'&&d.includes('T')){
+    date=new Date(d);
+  }else if(typeof d==='string'&&d.match(/^\d{4}-\d{2}-\d{2}$/)){
+    date=new Date(d+'T00:00:00');
+  }else{
+    date=new Date(d);
+  }
+  if(isNaN(date.getTime()))return'-';
+  return date.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});
+};
 
 function App(){
   const[apiUrl,setApiUrl]=useState(API_URL||localStorage.getItem('dainty_api')||'');

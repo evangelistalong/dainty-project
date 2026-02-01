@@ -47,7 +47,19 @@ async function api(url,action,params={}){
 }
 
 const fmt=n=>'₱'+(parseFloat(n)||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtDate=d=>d?new Date(d).toLocaleDateString('en-PH',{month:'short',day:'numeric'}):'-';
+const fmtDate=d=>{
+  if(!d)return'-';
+  let date;
+  if(typeof d==='string'&&d.includes('T')){
+    date=new Date(d);
+  }else if(typeof d==='string'&&d.match(/^\d{4}-\d{2}-\d{2}$/)){
+    date=new Date(d+'T00:00:00');
+  }else{
+    date=new Date(d);
+  }
+  if(isNaN(date.getTime()))return'-';
+  return date.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});
+};
 const fmtPrice=(p,u)=>{
   if(!p||p===0)return'-';
   let dp=p,du='/'+u;
@@ -395,7 +407,7 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
         </div>
         <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No purchases</p>:
-            filtered.slice(0,50).map((p,idx)=><div key={p.UniqueID+'_'+idx} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
+            filtered.slice(0,50).map((p,idx)=><div key={p.UniqueID+'_'+idx} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p><p className="text-xs text-gray-400">{fmtDate(p.PurchaseDate)}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
         </div>
       </div>
     </div>
@@ -495,7 +507,7 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
         </div>
         <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No expenses</p>:
-            filtered.slice(0,50).map((e,idx)=><div key={e.UniqueID+'_'+idx} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode} • {fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
+            filtered.slice(0,50).map((e,idx)=><div key={e.UniqueID+'_'+idx} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode}</p><p className="text-xs text-gray-400">{fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
         </div>
       </div>
     </div>
