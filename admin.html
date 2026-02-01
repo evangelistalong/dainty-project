@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Dainty v3</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *{-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;background:#f5f5f5}
+    input,select,button,textarea{font-size:16px!important}
+    .spin{animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .fade{animation:fade .2s ease-in}
+    @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    .card{background:#fff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden}
+    .btn{border:none;border-radius:10px;padding:12px 20px;font-weight:600;cursor:pointer;transition:all .2s}
+    .btn-p{background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff}
+    .btn-s{background:#f3f4f6;color:#374151}
+    .btn-sm{padding:8px 12px;font-size:13px}
+    .inp{width:100%;border:1px solid #e5e7eb;border-radius:10px;padding:12px;background:#fff}
+    .inp:focus{outline:none;border-color:#b91c1c;box-shadow:0 0 0 3px rgba(185,28,28,.1)}
+    .lbl{font-size:12px;color:#6b7280;font-weight:500;display:block;margin-bottom:4px}
+    .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .low{background:#dcfce7;color:#166534}
+    .high{background:#fee2e2;color:#991b1b}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useCallback}=React;
+
+async function api(url,action,params={}){
+  if(!url)throw new Error('API URL not set');
+  const u=new URL(url);
+  u.searchParams.set('action',action);
+  Object.entries(params).forEach(([k,v])=>{if(v!=null)u.searchParams.set(k,typeof v==='object'?JSON.stringify(v):v)});
+  const r=await fetch(u.toString());
+  const d=await r.json();
+  if(d.error)throw new Error(d.error);
+  return d;
+}
+
+const fmt=n=>'₱'+(parseFloat(n)||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtDate=d=>d?new Date(d).toLocaleDateString('en-PH',{month:'short',day:'numeric'}):'-';
+const fmtPrice=(p,u)=>{
+  if(!p||p===0)return'-';
+  let dp=p,du='/'+u;
+  if(u==='g'){dp=p*1000;du='/kg'}
+  else if(u==='ml'){dp=p*1000;du='/L'}
+  return dp.toFixed(2)+du;
+};
+
+const downloadCSV=(data,name)=>{
+  if(!data?.length)return;
+  const h=Object.keys(data[0]);
+  const csv=[h.join(','),...data.map(r=>h.map(k=>{let v=r[k]??'';if(typeof v==='string'&&(v.includes(',')||v.includes('"')))v='"'+v.replace(/"/g,'""')+'"';return v}).join(','))].join('\n');
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=name+'_'+new Date().toISOString().split('T')[0]+'.csv';a.click();
+  URL.revokeObjectURL(url);
+};
+
+function App(){
+  const HARDCODED_API_URL = 'https://script.google.com/macros/s/AKfycbxqSdXxqCna9TvELBaN-SBR-4xTIFU8duQF3KYBq14UTjJBF_ORGUWYZZy86pH-59Iv0Q/exec';
+  const[apiUrl,setApiUrl]=useState(HARDCODED_API_URL||localStorage.getItem('dainty_api')||'');
+  const[ready,setReady]=useState(!!localStorage.getItem('dainty_api'));
+  const[tab,setTab]=useState('dashboard');
+  const[branch,setBranch]=useState(localStorage.getItem('dainty_branch')||'All');
+  const[loading,setLoading]=useState(false);
+  const[toast,setToast]=useState(null);
+  const[settings,setSettings]=useState({});
+  const[branches,setBranches]=useState([]);
+  const[ingredients,setIngredients]=useState([]);
+  const[dishes,setDishes]=useState([]);
+  const[dishCats,setDishCats]=useState([]);
+  const[ingCats,setIngCats]=useState([]);
+  const[purchases,setPurchases]=useState([]);
+  const[expenses,setExpenses]=useState([]);
+  const[rowCounts,setRowCounts]=useState({total:0,percentUsed:0,status:'normal',counts:{}});
+
+  const showToast=(msg,type='success')=>{setToast({msg,type});setTimeout(()=>setToast(null),3000)};
+  const saveUrl=()=>{localStorage.setItem('dainty_api',apiUrl);setReady(true);loadAll()};
+  useEffect(()=>{if(branch)localStorage.setItem('dainty_branch',branch)},[branch]);
+
+  const loadAll=useCallback(async()=>{
+    if(!apiUrl)return;
+    setLoading(true);
+    try{
+      const[s,b,i,d,dc,ic,rc]=await Promise.all([
+        api(apiUrl,'getSettings'),api(apiUrl,'getBranches'),api(apiUrl,'getIngredients'),
+        api(apiUrl,'getDishes'),api(apiUrl,'getDishCategories'),api(apiUrl,'getIngredientCategories'),api(apiUrl,'getRowCounts')
+      ]);
+      setSettings(s.settings||{});setBranches(b.branches||[]);setIngredients(i.ingredients||[]);
+      setDishes(d.dishes||[]);setDishCats(dc.categories||[]);setIngCats(ic.categories||[]);setRowCounts(rc);
+    }catch(e){showToast(e.message,'error')}
+    finally{setLoading(false)}
+  },[apiUrl]);
+
+  const loadTx=useCallback(async()=>{
+    if(!apiUrl)return;
+    try{
+      const br=branch==='All'?'':branch;
+      const[p,e]=await Promise.all([api(apiUrl,'getPurchases',{branch:br,days:30}),api(apiUrl,'getExpenses',{branch:br,days:30})]);
+      setPurchases(p.purchases||[]);setExpenses(e.expenses||[]);
+    }catch(e){console.error(e)}
+  },[apiUrl,branch]);
+
+  useEffect(()=>{if(ready)loadAll()},[ready,loadAll]);
+  useEffect(()=>{if(ready)loadTx()},[ready,branch,loadTx]);
+
+  if(!ready)return(
+    <div className="min-h-screen flex items-center justify-center p-4" style={{background:'linear-gradient(135deg,#b91c1c,#7f1d1d)'}}>
+      <div className="card p-8 max-w-md w-full fade">
+        <div className="text-center mb-6">
+          <div className="text-6xl mb-4">🍜</div>
+          <h1 className="text-2xl font-bold text-gray-800">Dainty Restaurant System</h1>
+          <p className="text-gray-500 text-sm mt-1">Cloud-based management v3</p>
+        </div>
+        <div className="mb-4">
+          <label className="lbl">Google Apps Script URL</label>
+          <input value={apiUrl} onChange={e=>setApiUrl(e.target.value)} placeholder="https://script.google.com/macros/s/.../exec" className="inp"/>
+        </div>
+        <button onClick={saveUrl} disabled={!apiUrl} className="btn btn-p w-full" style={{opacity:apiUrl?1:.5}}>Connect</button>
+        <div className="mt-6 p-4 bg-amber-50 rounded-xl text-sm">
+          <p className="font-semibold text-amber-800 mb-2">📋 Setup:</p>
+          <ol className="text-amber-700 space-y-1 pl-4 list-decimal text-xs">
+            <li>Create new Google Sheet</li>
+            <li>Extensions → Apps Script</li>
+            <li>Paste script code</li>
+            <li>Run <code className="bg-amber-200 px-1 rounded">setupSheets</code></li>
+            <li>Deploy → Web App</li>
+            <li>Copy URL here</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div className="min-h-screen bg-gray-100 pb-4">
+      {toast&&<div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl shadow-lg text-white font-medium fade" style={{background:toast.type==='success'?'#10b981':'#ef4444'}}>{toast.msg}</div>}
+      
+      <header className="sticky top-0 z-40" style={{background:'linear-gradient(135deg,#dc2626,#991b1b)'}}>
+        <div className="p-4 text-white">
+          <div className="flex justify-between items-center mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🍜</span>
+              <div><h1 className="text-lg font-bold leading-tight">Dainty System</h1><p className="text-xs opacity-75">v3 Cloud</p></div>
+            </div>
+            <div className="flex items-center gap-2">
+              {loading&&<div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full spin"/>}
+              <button onClick={()=>{loadAll();loadTx()}} className="p-2 rounded-lg hover:bg-white/20">🔄</button>
+            </div>
+          </div>
+          <select value={branch} onChange={e=>setBranch(e.target.value)} className="w-full rounded-lg p-3 text-sm font-medium" style={{background:'rgba(255,255,255,.15)',color:'white',border:'1px solid rgba(255,255,255,.3)'}}>
+            <option value="All" style={{color:'#1f2937'}}>⭐ All Branches</option>
+            {branches.map(b=><option key={b.BranchCode} value={b.BranchName} style={{color:'#1f2937'}}>{b.BranchName}</option>)}
+          </select>
+        </div>
+      </header>
+
+      <nav className="bg-white border-b sticky top-[124px] z-30 flex overflow-x-auto">
+        {[{id:'dashboard',icon:'📊',l:'Dashboard'},{id:'purchases',icon:'🛒',l:'Purchases'},{id:'expenses',icon:'💰',l:'Expenses'},{id:'ingredients',icon:'🥬',l:'Ingredients'},{id:'dishes',icon:'🍳',l:'Dishes'},{id:'costing',icon:'💵',l:'Costing'},{id:'reports',icon:'📈',l:'Reports'},{id:'settings',icon:'⚙️',l:'Settings'}].map(t=>
+          <button key={t.id} onClick={()=>setTab(t.id)} className={`flex-none px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 ${tab===t.id?'bg-red-50 text-red-700 border-red-600':'bg-white text-gray-500 border-transparent'}`}>{t.icon} {t.l}</button>
+        )}
+      </nav>
+
+      {rowCounts.status!=='normal'&&<div className={`mx-4 mt-4 p-3 rounded-xl text-sm font-medium ${rowCounts.status==='critical'?'bg-red-100 text-red-800':'bg-amber-100 text-amber-800'}`}>
+        {rowCounts.status==='critical'?'🔴':'⚠️'} Database at {rowCounts.percentUsed}% ({rowCounts.total.toLocaleString()} rows). <button onClick={()=>setTab('settings')} className="underline ml-1">Archive →</button>
+      </div>}
+
+      <main className="p-4">
+        {tab==='dashboard'&&<Dashboard purchases={purchases} expenses={expenses} dishes={dishes} rowCounts={rowCounts}/>}
+        {tab==='purchases'&&<Purchases apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} purchases={purchases} showToast={showToast} loadTx={loadTx}/>}
+        {tab==='expenses'&&<Expenses apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} expenses={expenses} showToast={showToast} loadTx={loadTx}/>}
+        {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} showToast={showToast} loadAll={loadAll}/>}
+        {tab==='dishes'&&<Dishes apiUrl={apiUrl} dishes={dishes} dishCats={dishCats} ingredients={ingredients} showToast={showToast} loadAll={loadAll}/>}
+        {tab==='costing'&&<Costing apiUrl={apiUrl} dishes={dishes} branches={branches} branch={branch} settings={settings} showToast={showToast}/>}
+        {tab==='reports'&&<Reports apiUrl={apiUrl} branches={branches} branch={branch} purchases={purchases} expenses={expenses} dishes={dishes} showToast={showToast}/>}
+        {tab==='settings'&&<Settings apiUrl={apiUrl} setApiUrl={setApiUrl} setReady={setReady} settings={settings} branches={branches} rowCounts={rowCounts} showToast={showToast} loadAll={loadAll}/>}
+      </main>
+    </div>
+  );
+}
+
+function Dashboard({purchases,expenses,dishes,rowCounts}){
+  const today=new Date().toISOString().split('T')[0];
+  const tp=purchases.filter(p=>p.PurchaseDate===today);
+  const te=expenses.filter(e=>e.Date===today);
+  const tpT=tp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
+  const teT=te.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
+  const week=new Date();week.setDate(week.getDate()-7);
+  const wp=purchases.filter(p=>new Date(p.PurchaseDate)>=week);
+  const we=expenses.filter(e=>new Date(e.Date)>=week);
+  const wpT=wp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
+  const weT=we.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
+
+  return(
+    <div className="space-y-4 fade">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold text-gray-800">📊 Dashboard</h2>
+        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">💾 {(rowCounts.total||0).toLocaleString()} rows ({rowCounts.percentUsed||0}%)</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="card p-4" style={{background:'linear-gradient(135deg,#dc2626,#b91c1c)'}}><p className="text-white/80 text-xs">Today's Purchases</p><p className="text-white text-2xl font-bold mt-1">{fmt(tpT)}</p><p className="text-white/60 text-xs mt-1">{tp.length} items</p></div>
+        <div className="card p-4" style={{background:'linear-gradient(135deg,#f59e0b,#d97706)'}}><p className="text-white/80 text-xs">Today's Expenses</p><p className="text-white text-2xl font-bold mt-1">{fmt(teT)}</p><p className="text-white/60 text-xs mt-1">{te.length} items</p></div>
+      </div>
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">📅 Last 7 Days</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <div><p className="text-xs text-gray-500">Purchases</p><p className="text-xl font-bold text-red-600">{fmt(wpT)}</p><p className="text-xs text-gray-400">{wp.length} transactions</p></div>
+          <div><p className="text-xs text-gray-500">Expenses</p><p className="text-xl font-bold text-amber-600">{fmt(weT)}</p><p className="text-xs text-gray-400">{we.length} transactions</p></div>
+        </div>
+      </div>
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">📈 Overview</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{purchases.length}</p><p className="text-xs text-gray-500">Purchases</p></div>
+          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{expenses.length}</p><p className="text-xs text-gray-500">Expenses</p></div>
+          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{dishes.length}</p><p className="text-xs text-gray-500">Dishes</p></div>
+        </div>
+      </div>
+      <div className="card">
+        <div className="p-4 border-b bg-gray-50"><h3 className="font-semibold text-gray-700">🕐 Today's Activity</h3></div>
+        <div className="max-h-64 overflow-y-auto">
+          {[...tp.map(p=>({...p,_t:'p',_a:p.Price,_d:p.ItemName})),...te.map(e=>({...e,_t:'e',_a:e.Amount,_d:e.Description}))].slice(0,10).map((x,i)=>
+            <div key={i} className="p-3 border-b flex items-center gap-3">
+              <span className="text-xl">{x._t==='p'?'🛒':'💰'}</span>
+              <div className="flex-1 min-w-0"><p className="font-medium text-sm truncate">{x._d}</p><p className="text-xs text-gray-500">{x.BranchCode}</p></div>
+              <span className="font-bold text-sm" style={{color:x._t==='p'?'#dc2626':'#d97706'}}>{fmt(x._a)}</span>
+            </div>
+          )}
+          {tp.length===0&&te.length===0&&<p className="p-8 text-center text-gray-400">No activity today</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx}){
+  const[show,setShow]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const[selBr,setSelBr]=useState(branch==='All'?(branches[0]?.BranchName||''):branch);
+  const[form,setForm]=useState({PurchaseDate:new Date().toISOString().split('T')[0],Supplier:'',items:[{ItemName:'',Qty:'',Unit:'kg',Price:''}]});
+  useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
+
+  const addItem=()=>setForm({...form,items:[...form.items,{ItemName:'',Qty:'',Unit:'kg',Price:''}]});
+  const rmItem=i=>form.items.length>1&&setForm({...form,items:form.items.filter((_,idx)=>idx!==i)});
+  const upItem=(i,f,v)=>{const items=[...form.items];items[i]={...items[i],[f]:v};setForm({...form,items})};
+
+  const submit=async()=>{
+    const valid=form.items.filter(i=>i.ItemName&&i.Qty&&i.Price);
+    if(!valid.length){showToast('Add items','error');return}
+    if(!selBr){showToast('Select branch','error');return}
+    setSaving(true);
+    try{
+      await api(apiUrl,'addPurchases',{data:valid.map(i=>({...i,Branch:selBr,PurchaseDate:form.PurchaseDate,Supplier:form.Supplier}))});
+      showToast(`Added ${valid.length} items!`);
+      setForm({PurchaseDate:form.PurchaseDate,Supplier:form.Supplier,items:[{ItemName:'',Qty:'',Unit:'kg',Price:''}]});
+      setShow(false);loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
+  const total=form.items.reduce((s,i)=>s+(parseFloat(i.Price)||0),0);
+  const units=(settings.Units||'kg,g,L,ml,pcs').split(',');
+
+  return(
+    <div className="space-y-4 fade">
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-bold text-gray-800">🛒 Purchases</h2>
+        <div className="flex gap-2">
+          <button onClick={()=>downloadCSV(purchases,'purchases')} className="btn btn-s btn-sm">📥</button>
+          <button onClick={()=>setShow(!show)} className="btn btn-p btn-sm">{show?'✕':'+ New'}</button>
+        </div>
+      </div>
+
+      {show&&<div className="card p-4 fade space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Date</label><input type="date" value={form.PurchaseDate} onChange={e=>setForm({...form,PurchaseDate:e.target.value})} className="inp"/></div>
+          <div><label className="lbl">Branch</label><select value={selBr} onChange={e=>setSelBr(e.target.value)} className="inp">{branches.map(b=><option key={b.BranchCode} value={b.BranchName}>{b.BranchName}</option>)}</select></div>
+        </div>
+        <div><label className="lbl">Supplier</label><input value={form.Supplier} onChange={e=>setForm({...form,Supplier:e.target.value})} className="inp" placeholder="Supplier"/></div>
+        <div className="flex justify-between items-center pt-2"><span className="font-semibold text-gray-700">Items ({form.items.length})</span><button onClick={addItem} className="btn btn-s btn-sm">+ Item</button></div>
+        {form.items.map((item,i)=>
+          <div key={i} className="p-3 bg-gray-50 rounded-xl space-y-2">
+            <div className="flex justify-between items-center"><span className="text-xs text-gray-500 font-medium">#{i+1}</span>{form.items.length>1&&<button onClick={()=>rmItem(i)} className="text-red-500 text-sm font-bold">✕</button>}</div>
+            <input value={item.ItemName} onChange={e=>upItem(i,'ItemName',e.target.value)} className="inp" placeholder="Item name *"/>
+            <div className="grid grid-cols-3 gap-2">
+              <input type="number" value={item.Qty} onChange={e=>upItem(i,'Qty',e.target.value)} className="inp" placeholder="Qty *" step="0.01"/>
+              <select value={item.Unit} onChange={e=>upItem(i,'Unit',e.target.value)} className="inp">{units.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select>
+              <input type="number" value={item.Price} onChange={e=>upItem(i,'Price',e.target.value)} className="inp" placeholder="₱ *" step="0.01"/>
+            </div>
+          </div>
+        )}
+        {total>0&&<div className="p-3 bg-red-50 rounded-xl flex justify-between items-center"><span className="font-medium text-red-800">Total:</span><span className="text-2xl font-bold text-red-700">{fmt(total)}</span></div>}
+        <button onClick={submit} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'Save Purchase'}</button>
+      </div>}
+
+      <div className="card">
+        <div className="p-3 border-b bg-gray-50 flex justify-between"><span className="font-semibold text-gray-700">Recent (30 days)</span><span className="text-sm text-gray-500">{purchases.length} items</span></div>
+        <div className="max-h-96 overflow-y-auto">
+          {purchases.length===0?<p className="p-8 text-center text-gray-400">No purchases</p>:
+            purchases.slice(0,50).map(p=><div key={p.UniqueID} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
+  const[show,setShow]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const[selBr,setSelBr]=useState(branch==='All'?(branches[0]?.BranchName||''):branch);
+  const[form,setForm]=useState({Date:new Date().toISOString().split('T')[0],Category:'Utilities',Vendor:'',PayMethod:'Cash',Amount:'',Description:''});
+  const[viewPhoto,setViewPhoto]=useState(null);
+  useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
+
+  const submit=async()=>{
+    if(!form.Description||!form.Amount){showToast('Fill required','error');return}
+    if(!selBr){showToast('Select branch','error');return}
+    setSaving(true);
+    try{
+      await api(apiUrl,'addExpense',{data:{...form,Branch:selBr}});
+      showToast('Added!');setForm({...form,Vendor:'',Amount:'',Description:''});setShow(false);loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
+  const cats=(settings.ExpenseCategories||'Utilities,Supplies,Maintenance,Transportation,Labor,Marketing,Rent,Other').split(',');
+  const pays=(settings.PaymentMethods||'Cash,GCash').split(',');
+
+  return(
+    <div className="space-y-4 fade">
+      {viewPhoto&&<div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={()=>setViewPhoto(null)}><div className="max-w-lg w-full"><img src={viewPhoto} alt="Receipt" className="w-full rounded-lg"/><p className="text-center text-white mt-2 text-sm">Tap to close</p></div></div>}
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-bold text-gray-800">💰 Expenses</h2>
+        <div className="flex gap-2">
+          <button onClick={()=>downloadCSV(expenses,'expenses')} className="btn btn-s btn-sm">📥</button>
+          <button onClick={()=>setShow(!show)} className="btn btn-p btn-sm">{show?'✕':'+ New'}</button>
+        </div>
+      </div>
+
+      {show&&<div className="card p-4 fade space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Date</label><input type="date" value={form.Date} onChange={e=>setForm({...form,Date:e.target.value})} className="inp"/></div>
+          <div><label className="lbl">Branch</label><select value={selBr} onChange={e=>setSelBr(e.target.value)} className="inp">{branches.map(b=><option key={b.BranchCode} value={b.BranchName}>{b.BranchName}</option>)}</select></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Category</label><select value={form.Category} onChange={e=>setForm({...form,Category:e.target.value})} className="inp">{cats.map(c=><option key={c} value={c.trim()}>{c.trim()}</option>)}</select></div>
+          <div><label className="lbl">Payment</label><select value={form.PayMethod} onChange={e=>setForm({...form,PayMethod:e.target.value})} className="inp">{pays.map(m=><option key={m} value={m.trim()}>{m.trim()}</option>)}</select></div>
+        </div>
+        <div><label className="lbl">Description *</label><input value={form.Description} onChange={e=>setForm({...form,Description:e.target.value})} className="inp" placeholder="What for?"/></div>
+        <div><label className="lbl">Vendor</label><input value={form.Vendor} onChange={e=>setForm({...form,Vendor:e.target.value})} className="inp"/></div>
+        <div><label className="lbl">Amount *</label><input type="number" value={form.Amount} onChange={e=>setForm({...form,Amount:e.target.value})} className="inp text-xl font-bold" placeholder="₱ 0.00" step="0.01"/></div>
+        <button onClick={submit} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'Add Expense'}</button>
+      </div>}
+
+      <div className="card">
+        <div className="p-3 border-b bg-gray-50 flex justify-between"><span className="font-semibold text-gray-700">Recent (30 days)</span><span className="text-sm text-gray-500">{expenses.length} items</span></div>
+        <div className="max-h-96 overflow-y-auto">
+          {expenses.length===0?<p className="p-8 text-center text-gray-400">No expenses</p>:
+            expenses.slice(0,50).map(e=><div key={e.UniqueID} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode} • {fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
+  const[show,setShow]=useState(false);
+  const[edit,setEdit]=useState(null);
+  const[saving,setSaving]=useState(false);
+  const[search,setSearch]=useState('');
+  const[form,setForm]=useState({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});
+
+  const add=async()=>{
+    if(!form.Name){showToast('Enter name','error');return}
+    setSaving(true);
+    try{await api(apiUrl,'addIngredient',{data:form});showToast('Added!');setForm({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});setShow(false);loadAll();}
+    catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+  const del=async sku=>{if(!confirm('Delete?'))return;try{await api(apiUrl,'deleteIngredient',{sku});showToast('Deleted');loadAll();}catch(e){showToast(e.message,'error')}};
+  const saveEdit=async()=>{if(!edit)return;setSaving(true);try{await api(apiUrl,'updateIngredient',{sku:edit.MasterSKU,data:JSON.stringify({Name:edit.Name,Unit:edit.Unit,Category:edit.Category,YieldPercent:edit.YieldPercent,ContainerType:edit.ContainerType,ContainerSize:edit.ContainerSize,ContainerUnit:edit.ContainerUnit})});showToast('Saved!');setEdit(null);loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
+
+  const filtered=ingredients.filter(i=>i.Name?.toLowerCase().includes(search.toLowerCase()));
+  const units=(settings.Units||'g,kg,ml,L,pcs').split(',');
+  const containerTypes=['', ...(settings.ContainerTypes||'Sack,Bottle,Can,Box,Pack,Drum,Bag,Tray,Gallon,Piece').split(',').map(s=>s.trim())];
+  const containerUnits=(settings.ContainerUnits||'kg,g,L,ml,pcs').split(',').map(s=>s.trim());
+
+  return(
+    <div className="space-y-4 fade">
+      {edit&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setEdit(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-md w-full fade max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-lg">✏️ Edit Ingredient</h3>
+            <button onClick={()=>setEdit(null)} className="text-2xl text-gray-400">✕</button>
+          </div>
+          <div className="space-y-3">
+            <div><label className="lbl">Name</label><input value={edit.Name} onChange={e=>setEdit({...edit,Name:e.target.value})} className="inp"/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="lbl">Base Unit (for recipes)</label><select value={edit.Unit} onChange={e=>setEdit({...edit,Unit:e.target.value})} className="inp">{units.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select></div>
+              <div><label className="lbl">Yield %</label><input type="number" value={edit.YieldPercent||100} onChange={e=>setEdit({...edit,YieldPercent:e.target.value})} className="inp"/></div>
+            </div>
+            <div><label className="lbl">Category</label><select value={edit.Category} onChange={e=>setEdit({...edit,Category:e.target.value})} className="inp">{ingCats.map(c=><option key={c.Category}>{c.Category}</option>)}</select></div>
+            
+            <div className="p-3 bg-blue-50 rounded-xl">
+              <p className="text-sm font-semibold text-blue-700 mb-2">📦 Default Container (optional)</p>
+              <p className="text-xs text-blue-600 mb-2">Pre-fills when staff enters purchases</p>
+              <div className="grid grid-cols-3 gap-2">
+                <div><label className="text-xs text-blue-600">Type</label><select value={edit.ContainerType||''} onChange={e=>setEdit({...edit,ContainerType:e.target.value})} className="inp text-sm">{containerTypes.map(c=><option key={c} value={c}>{c||'(none)'}</option>)}</select></div>
+                <div><label className="text-xs text-blue-600">Size</label><input type="number" value={edit.ContainerSize||''} onChange={e=>setEdit({...edit,ContainerSize:e.target.value})} className="inp text-sm" placeholder="25" step="0.1"/></div>
+                <div><label className="text-xs text-blue-600">Unit</label><select value={edit.ContainerUnit||'kg'} onChange={e=>setEdit({...edit,ContainerUnit:e.target.value})} className="inp text-sm">{containerUnits.map(u=><option key={u}>{u}</option>)}</select></div>
+              </div>
+            </div>
+            
+            <button onClick={saveEdit} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'💾 Save Changes'}</button>
+          </div>
+          <p className="text-xs text-gray-400 text-center mt-3">SKU: {edit.MasterSKU}</p>
+        </div>
+      </div>}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-bold text-gray-800">🥬 Ingredients</h2>
+        <div className="flex gap-2">
+          <button onClick={()=>downloadCSV(ingredients,'ingredients')} className="btn btn-s btn-sm">📥</button>
+          <button onClick={()=>setShow(!show)} className="btn btn-p btn-sm">{show?'✕':'+ Add'}</button>
+        </div>
+      </div>
+
+      {show&&<div className="card p-4 fade space-y-3">
+        <div><label className="lbl">Name *</label><input value={form.Name} onChange={e=>setForm({...form,Name:e.target.value})} className="inp" placeholder="e.g., Chicken Thigh"/></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Base Unit</label><select value={form.Unit} onChange={e=>setForm({...form,Unit:e.target.value})} className="inp">{units.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select></div>
+          <div><label className="lbl">Yield %</label><input type="number" value={form.YieldPercent} onChange={e=>setForm({...form,YieldPercent:e.target.value})} className="inp"/></div>
+        </div>
+        <div><label className="lbl">Category</label><select value={form.Category} onChange={e=>setForm({...form,Category:e.target.value})} className="inp">{ingCats.map(c=><option key={c.Category}>{c.Category}</option>)}</select></div>
+        
+        <div className="p-3 bg-blue-50 rounded-xl">
+          <p className="text-sm font-semibold text-blue-700 mb-2">📦 Default Container (optional)</p>
+          <div className="grid grid-cols-3 gap-2">
+            <div><label className="text-xs text-blue-600">Type</label><select value={form.ContainerType} onChange={e=>setForm({...form,ContainerType:e.target.value})} className="inp text-sm">{containerTypes.map(c=><option key={c} value={c}>{c||'(none)'}</option>)}</select></div>
+            <div><label className="text-xs text-blue-600">Size</label><input type="number" value={form.ContainerSize} onChange={e=>setForm({...form,ContainerSize:e.target.value})} className="inp text-sm" placeholder="25" step="0.1"/></div>
+            <div><label className="text-xs text-blue-600">Unit</label><select value={form.ContainerUnit} onChange={e=>setForm({...form,ContainerUnit:e.target.value})} className="inp text-sm">{containerUnits.map(u=><option key={u}>{u}</option>)}</select></div>
+          </div>
+        </div>
+        
+        <button onClick={add} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'Add'}</button>
+      </div>}
+
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search..." className="inp"/>
+      <div className="card">
+        <div className="p-3 border-b bg-gray-50"><span className="font-semibold text-gray-700">{filtered.length} ingredients</span></div>
+        <div className="max-h-96 overflow-y-auto">
+          {filtered.length===0?<p className="p-8 text-center text-gray-400">None</p>:
+            filtered.map(ing=><div key={ing.MasterSKU} className="p-3 border-b flex items-center"><div className="flex-1"><p className="font-medium">{ing.Name}</p><p className="text-xs text-gray-500">SKU: {ing.MasterSKU} • {ing.Unit} • {ing.Category}{ing.ContainerType?<span className="text-blue-500"> • 📦 {ing.ContainerType} ({ing.ContainerSize}{ing.ContainerUnit})</span>:''}</p></div><button onClick={()=>setEdit({...ing})} className="text-blue-500 p-2">✏️</button><button onClick={()=>del(ing.MasterSKU)} className="text-red-500 p-2">🗑️</button></div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dishes({apiUrl,dishes,dishCats,ingredients,showToast,loadAll}){
+  const[show,setShow]=useState(false);
+  const[edit,setEdit]=useState(null);
+  const[editProc,setEditProc]=useState(null);
+  const[procTemplates,setProcTemplates]=useState([]);
+  const[saving,setSaving]=useState(false);
+  const[search,setSearch]=useState('');
+  const[filterCat,setFilterCat]=useState('All');
+  const[form,setForm]=useState({Name:'',Category:'Main Dish',SellPrice:'',ServingSize:1});
+
+  useEffect(()=>{if(apiUrl)(async()=>{try{const r=await api(apiUrl,'getProcedureTemplates');setProcTemplates(r.templates||[])}catch(e){console.error(e)}})()},[apiUrl]);
+
+  const add=async()=>{
+    if(!form.Name){showToast('Enter name','error');return}
+    setSaving(true);
+    try{await api(apiUrl,'addDish',{data:form});showToast('Added!');setForm({Name:'',Category:'Main Dish',SellPrice:'',ServingSize:1});setShow(false);loadAll();}
+    catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+  const del=async mcode=>{if(!confirm('Delete?'))return;try{await api(apiUrl,'deleteDish',{mcode});showToast('Deleted');loadAll();}catch(e){showToast(e.message,'error')}};
+
+  const comboCats=dishCats.filter(c=>c.IsComboType==='Yes').map(c=>c.Category);
+  const filtered=dishes.filter(d=>{const ms=d.Name?.toLowerCase().includes(search.toLowerCase());const mc=filterCat==='All'||d.Category===filterCat;return ms&&mc});
+  const grouped={};filtered.forEach(d=>{if(!grouped[d.Category])grouped[d.Category]=[];grouped[d.Category].push(d)});
+
+  return(
+    <div className="space-y-4 fade">
+      {edit&&<RecipeEditor apiUrl={apiUrl} dish={edit} dishes={dishes} ingredients={ingredients} comboCats={comboCats} onClose={()=>setEdit(null)} showToast={showToast}/>}
+      {editProc&&<ProcedureEditor apiUrl={apiUrl} dish={editProc} ingredients={ingredients} templates={procTemplates} onClose={()=>setEditProc(null)} showToast={showToast}/>}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-lg font-bold text-gray-800">🍳 Dishes</h2>
+        <div className="flex gap-2">
+          <button onClick={()=>downloadCSV(dishes,'dishes')} className="btn btn-s btn-sm">📥</button>
+          <button onClick={()=>setShow(!show)} className="btn btn-p btn-sm">{show?'✕':'+ Add'}</button>
+        </div>
+      </div>
+
+      {show&&<div className="card p-4 fade space-y-3">
+        <div><label className="lbl">Name *</label><input value={form.Name} onChange={e=>setForm({...form,Name:e.target.value})} className="inp" placeholder="Dish name"/></div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Category</label><select value={form.Category} onChange={e=>setForm({...form,Category:e.target.value})} className="inp">{dishCats.map(c=><option key={c.Category}>{c.Category}{c.IsComboType==='Yes'?' (Combo)':''}</option>)}</select></div>
+          <div><label className="lbl">Sell Price</label><input type="number" value={form.SellPrice} onChange={e=>setForm({...form,SellPrice:e.target.value})} className="inp" placeholder="₱"/></div>
+        </div>
+        <div><label className="lbl">Serving Size</label><input type="number" value={form.ServingSize} onChange={e=>setForm({...form,ServingSize:e.target.value})} className="inp"/></div>
+        <button onClick={add} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'Add Dish'}</button>
+      </div>}
+
+      <div className="flex gap-2">
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search..." className="inp flex-1"/>
+        <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="inp" style={{width:'auto'}}><option value="All">All</option>{dishCats.map(c=><option key={c.Category}>{c.Category}</option>)}</select>
+      </div>
+
+      <div className="space-y-3">
+        {Object.entries(grouped).map(([cat,catDishes])=>
+          <div key={cat} className="card">
+            <div className="p-3 border-b bg-gray-50 flex items-center gap-2">
+              <span className="font-semibold text-gray-700">{cat}</span>
+              <span className="text-xs text-gray-500">({catDishes.length})</span>
+              {comboCats.includes(cat)&&<span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">Combo</span>}
+            </div>
+            {catDishes.map(dish=><div key={dish.MCODE} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium">{dish.Name}</p><p className="text-xs text-gray-500">{dish.MCODE}{dish.SellPrice?` • ${fmt(dish.SellPrice)}`:''}</p></div><button onClick={()=>setEdit(dish)} className="text-blue-600 px-2 text-xs font-medium">Recipe</button><button onClick={()=>setEditProc(dish)} className="text-purple-600 px-2 text-xs font-medium">Steps</button><button onClick={()=>del(dish.MCODE)} className="text-red-500 p-2">🗑️</button></div>)}
+          </div>
+        )}
+        {Object.keys(grouped).length===0&&<p className="text-center text-gray-400 py-8">No dishes</p>}
+      </div>
+    </div>
+  );
+}
+
+function RecipeEditor({apiUrl,dish,dishes,ingredients,comboCats,onClose,showToast}){
+  const[lines,setLines]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[saving,setSaving]=useState(false);
+  const[picker,setPicker]=useState(null);
+  const[pSearch,setPSearch]=useState('');
+
+  const isCombo=comboCats.includes(dish.Category);
+  const compDishes=dishes.filter(d=>d.CanBeComponent==='Yes'&&d.MCODE!==dish.MCODE);
+
+  useEffect(()=>{(async()=>{setLoading(true);try{const r=await api(apiUrl,'getRecipeLines',{mcode:dish.MCODE});setLines(r.lines||[])}catch(e){showToast(e.message,'error')}finally{setLoading(false)}})()},[dish.MCODE]);
+
+  const addLine=t=>setLines([...lines,{IngredientType:t,IngredientName:'',MasterSKU:'',ComponentMCODE:'',Qty:'',Unit:t==='dish'?'dish':'g',YieldPercent:100,_t:Date.now()}]);
+  const upLine=(i,f,v)=>{const n=[...lines];n[i]={...n[i],[f]:v};setLines(n)};
+  const rmLine=i=>setLines(lines.filter((_,idx)=>idx!==i));
+  const select=item=>{if(picker.t==='ingredient'){upLine(picker.i,'IngredientName',item.Name);upLine(picker.i,'MasterSKU',item.MasterSKU);upLine(picker.i,'Unit',item.Unit||'g')}else{upLine(picker.i,'IngredientName',item.Name);upLine(picker.i,'ComponentMCODE',item.MCODE);upLine(picker.i,'Unit','dish')}setPicker(null);setPSearch('')};
+  const save=async()=>{const valid=lines.filter(l=>l.IngredientName&&l.Qty);setSaving(true);try{await api(apiUrl,'saveRecipeLines',{mcode:dish.MCODE,lines:valid});showToast('Saved!');onClose()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
+
+  const filtIng=ingredients.filter(i=>i.Name?.toLowerCase().includes(pSearch.toLowerCase()));
+  const filtDish=compDishes.filter(d=>d.Name?.toLowerCase().includes(pSearch.toLowerCase()));
+
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+      <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
+        <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+          <div><h3 className="font-bold text-lg">{dish.Name}</h3><p className="text-xs text-gray-500">{dish.MCODE} • {dish.Category}</p></div>
+          <button onClick={onClose} className="text-2xl text-gray-400">✕</button>
+        </div>
+
+        {picker&&<div className="absolute inset-0 bg-white z-10 flex flex-col">
+          <div className="p-4 border-b">
+            <div className="flex justify-between items-center mb-3"><h4 className="font-semibold">Select {picker.t==='ingredient'?'Ingredient':'Dish'}</h4><button onClick={()=>setPicker(null)} className="text-xl">✕</button></div>
+            <input value={pSearch} onChange={e=>setPSearch(e.target.value)} placeholder="🔍 Search..." className="inp" autoFocus/>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {picker.t==='ingredient'?filtIng.slice(0,50).map(i=><button key={i.MasterSKU} onClick={()=>select(i)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{i.Name}</span><span className="text-xs text-gray-500 ml-2">[{i.MasterSKU}] {i.Unit}</span></button>)
+              :filtDish.slice(0,50).map(d=><button key={d.MCODE} onClick={()=>select(d)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{d.Name}</span><span className="text-xs text-gray-500 ml-2">[{d.MCODE}]</span></button>)}
+          </div>
+        </div>}
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading?<p className="text-center py-8 text-gray-400">Loading...</p>:<>
+            <div className="flex gap-2 mb-4">
+              <button onClick={()=>addLine('ingredient')} className="btn btn-s flex-1 text-sm">+ Ingredient</button>
+              {isCombo&&<button onClick={()=>addLine('dish')} className="flex-1 text-sm px-4 py-2 bg-purple-100 text-purple-700 rounded-lg font-medium">+ Dish</button>}
+            </div>
+            {lines.length===0?<p className="text-center py-8 text-gray-400">No ingredients</p>:
+              <div className="space-y-3">{lines.map((line,i)=>
+                <div key={line.RecipeLineID||line._t} className="p-3 rounded-xl border" style={{background:line.IngredientType==='dish'?'#f3e8ff':'#f9fafb'}}>
+                  <div className="flex justify-between items-center mb-2"><span className="text-xs font-medium text-gray-500">{line.IngredientType==='dish'?'🍳 Dish':'🥬 Ingredient'}</span><button onClick={()=>rmLine(i)} className="text-red-500 text-sm">✕</button></div>
+                  <button onClick={()=>setPicker({i,t:line.IngredientType==='dish'?'dish':'ingredient'})} className="w-full p-2 rounded-lg border bg-white text-left mb-2 text-sm">{line.IngredientName||<span className="text-gray-400">Tap to select...</span>}</button>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div><label className="text-xs text-gray-500">Qty</label><input type="number" value={line.Qty} onChange={e=>upLine(i,'Qty',e.target.value)} className="inp text-sm p-2" step="0.01"/></div>
+                    <div><label className="text-xs text-gray-500">Unit</label><input value={line.Unit} onChange={e=>upLine(i,'Unit',e.target.value)} className="inp text-sm p-2" disabled={line.IngredientType==='dish'}/></div>
+                    <div><label className="text-xs text-gray-500">Yield%</label><input type="number" value={line.YieldPercent||100} onChange={e=>upLine(i,'YieldPercent',e.target.value)} className="inp text-sm p-2"/></div>
+                  </div>
+                </div>
+              )}</div>}
+          </>}
+        </div>
+        <div className="p-4 border-t bg-gray-50"><button onClick={save} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':`Save (${lines.filter(l=>l.IngredientName&&l.Qty).length} items)`}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function ProcedureEditor({apiUrl,dish,ingredients,templates,onClose,showToast}){
+  const[steps,setSteps]=useState([]);
+  const[recipeIngs,setRecipeIngs]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[saving,setSaving]=useState(false);
+
+  useEffect(()=>{(async()=>{
+    setLoading(true);
+    try{
+      const[procRes,recipeRes]=await Promise.all([
+        api(apiUrl,'getProcedures',{mcode:dish.MCODE}),
+        api(apiUrl,'getRecipeLines',{mcode:dish.MCODE})
+      ]);
+      setSteps(procRes.procedures||[]);
+      // Get only ingredients from this recipe
+      const recipeSkus=new Set((recipeRes.lines||[]).filter(l=>l.MasterSKU).map(l=>String(l.MasterSKU)));
+      const filtered=ingredients.filter(ing=>recipeSkus.has(String(ing.MasterSKU)));
+      setRecipeIngs(filtered);
+    }catch(e){showToast(e.message,'error')}
+    finally{setLoading(false)}
+  })()},[dish.MCODE,apiUrl,ingredients]);
+
+  const addStep=(template)=>{
+    setSteps([...steps,{
+      Action:template?.Action||'',
+      IngredientName:'',
+      MasterSKU:'',
+      Qty:'',
+      Unit:'',
+      Duration:template?.DefaultDuration||'',
+      Notes:'',
+      _t:Date.now()
+    }]);
+  };
+  const upStep=(i,f,v)=>{const n=[...steps];n[i]={...n[i],[f]:v};setSteps(n)};
+  const rmStep=i=>setSteps(steps.filter((_,idx)=>idx!==i));
+  const moveStep=(i,dir)=>{
+    if((dir===-1&&i===0)||(dir===1&&i===steps.length-1))return;
+    const n=[...steps];
+    [n[i],n[i+dir]]=[n[i+dir],n[i]];
+    setSteps(n);
+  };
+  const selectIng=(i,ing)=>{
+    upStep(i,'IngredientName',ing.Name);
+    upStep(i,'MasterSKU',ing.MasterSKU);
+    upStep(i,'Unit',ing.Unit);
+  };
+
+  const save=async()=>{
+    setSaving(true);
+    try{
+      await api(apiUrl,'saveProcedures',{mcode:dish.MCODE,steps});
+      showToast('Saved!');
+      onClose();
+    }catch(e){showToast(e.message,'error')}
+    finally{setSaving(false)}
+  };
+
+  const grouped={Prep:[],Cook:[],Finish:[]};
+  templates.forEach(t=>{if(grouped[t.Category])grouped[t.Category].push(t);else grouped.Cook.push(t)});
+
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+      <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
+        <div className="p-4 border-b flex justify-between items-center bg-purple-50">
+          <div><h3 className="font-bold text-lg text-purple-800">📝 {dish.Name}</h3><p className="text-xs text-purple-600">Cooking Procedure</p></div>
+          <button onClick={onClose} className="text-2xl text-gray-400">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading?<p className="text-center py-8 text-gray-400">Loading...</p>:<>
+            
+            {/* Quick Add Templates */}
+            <div className="mb-4">
+              <p className="text-xs text-gray-500 font-medium mb-2">Quick Add Step:</p>
+              <div className="flex flex-wrap gap-1">
+                {Object.entries(grouped).map(([cat,tpls])=>
+                  tpls.slice(0,4).map(t=>
+                    <button key={t.TemplateID} onClick={()=>addStep(t)} className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 hover:bg-purple-200">{t.Action}</button>
+                  )
+                )}
+                <button onClick={()=>addStep(null)} className="text-xs px-2 py-1 rounded-full bg-gray-200 text-gray-600">+ Custom</button>
+              </div>
+            </div>
+
+            {steps.length===0?<p className="text-center py-8 text-gray-400">No steps yet. Add from templates above.</p>:
+              <div className="space-y-3">{steps.map((step,i)=>
+                <div key={step.ProcedureID||step._t} className="p-3 rounded-xl border bg-gray-50">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold">{i+1}</span>
+                      <div className="flex gap-1">
+                        <button onClick={()=>moveStep(i,-1)} disabled={i===0} className="text-gray-400 disabled:opacity-30">▲</button>
+                        <button onClick={()=>moveStep(i,1)} disabled={i===steps.length-1} className="text-gray-400 disabled:opacity-30">▼</button>
+                      </div>
+                    </div>
+                    <button onClick={()=>rmStep(i)} className="text-red-500 text-sm font-bold">✕</button>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-xs text-gray-500">Action</label>
+                      <select value={step.Action} onChange={e=>upStep(i,'Action',e.target.value)} className="inp text-sm p-2">
+                        <option value="">-- Select or type --</option>
+                        {templates.map(t=><option key={t.TemplateID} value={t.Action}>{t.Action}</option>)}
+                      </select>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-gray-500">Ingredient (from recipe)</label>
+                        <select value={step.MasterSKU||''} onChange={e=>{const ing=recipeIngs.find(x=>String(x.MasterSKU)===e.target.value);if(ing)selectIng(i,ing);else{upStep(i,'IngredientName','');upStep(i,'MasterSKU','');}}} className="inp text-sm p-2">
+                          <option value="">-- Optional --</option>
+                          {recipeIngs.map(ing=><option key={ing.MasterSKU} value={ing.MasterSKU}>{ing.Name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">Duration</label>
+                        <input value={step.Duration||''} onChange={e=>upStep(i,'Duration',e.target.value)} className="inp text-sm p-2" placeholder="e.g., 5 min"/>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label className="text-xs text-gray-500">Notes</label>
+                      <input value={step.Notes||''} onChange={e=>upStep(i,'Notes',e.target.value)} className="inp text-sm p-2" placeholder="Additional details..."/>
+                    </div>
+                  </div>
+                </div>
+              )}</div>}
+          </>}
+        </div>
+        
+        <div className="p-4 border-t bg-gray-50">
+          <button onClick={save} disabled={saving} className="btn w-full text-white" style={{background:'linear-gradient(135deg,#7c3aed,#5b21b6)'}}>
+            {saving?'Saving...':`💾 Save Procedure (${steps.length} steps)`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Costing({apiUrl,dishes,branches,branch,settings,showToast}){
+  const[sub,setSub]=useState('dishes');
+  const[costs,setCosts]=useState([]);
+  const[prices,setPrices]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[detail,setDetail]=useState(null);
+  const[filterCat,setFilterCat]=useState('All');
+  const[days,setDays]=useState(parseInt(settings.CostingLookbackDays)||30);
+  const[method,setMethod]=useState(settings.CostingMethod||'Highest');
+  const[selDish,setSelDish]=useState('');
+
+  const calcSingle=async()=>{if(!selDish){showToast('Select a dish','error');return}setLoading(true);try{const r=await api(apiUrl,'calculateDishCost',{mcode:selDish,days,method,branch:branch==='All'?'':branch});setDetail(r);showToast('Done!')}catch(e){showToast(e.message,'error')}finally{setLoading(false)}};
+  const calcAll=async()=>{if(!confirm('Calculate ALL '+dishes.length+' dishes? This may take 1-2 minutes.')){return}setLoading(true);try{const r=await api(apiUrl,'calculateAllDishCosts',{days,method,branch:branch==='All'?'':branch});setCosts(r.costs||[]);showToast('Calculated!')}catch(e){showToast(e.message,'error')}finally{setLoading(false)}};
+  const loadPrices=async()=>{setLoading(true);try{const r=await api(apiUrl,'getIngredientPricesByBranch',{days,method});setPrices(r.prices||[]);showToast('Loaded!')}catch(e){showToast(e.message,'error')}finally{setLoading(false)}};
+  const viewDetail=async mcode=>{try{const r=await api(apiUrl,'calculateDishCost',{mcode,days,method,branch:branch==='All'?'':branch});setDetail(r)}catch(e){showToast(e.message,'error')}};
+  const[priceDetail,setPriceDetail]=useState(null);
+  const exportPrices=()=>{const data=prices.map(item=>{const row={ItemName:item.ItemName,Unit:item.Unit,Category:item.Category||'',Avg:item.avgPrice,Min:item.minPrice,Max:item.maxPrice};branches.forEach(b=>{row[b.BranchCode]=item.branchPrices?.[b.BranchCode]??''});return row});downloadCSV(data,'ingredient_prices')};
+
+  const filtCosts=filterCat==='All'?costs:costs.filter(c=>c.category===filterCat);
+  const cats=[...new Set(costs.map(c=>c.category))];
+
+  return(
+    <div className="space-y-4 fade">
+      {detail&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-hidden fade">
+          <div className="p-4 border-b flex justify-between items-center"><h3 className="font-bold">{detail.dishName}</h3><button onClick={()=>setDetail(null)} className="text-2xl text-gray-400">✕</button></div>
+          <div className="p-4 overflow-y-auto" style={{maxHeight:'60vh'}}>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="p-3 bg-green-50 rounded-xl"><p className="text-xs text-green-600">Total Cost</p><p className="text-xl font-bold text-green-700">{fmt(detail.cost)}</p></div>
+              <div className="p-3 bg-blue-50 rounded-xl"><p className="text-xs text-blue-600">Cost/Serving</p><p className="text-xl font-bold text-blue-700">{fmt(detail.costPerServing)}</p></div>
+              {detail.sellPrice>0&&<><div className="p-3 bg-amber-50 rounded-xl"><p className="text-xs text-amber-600">Sell Price</p><p className="text-xl font-bold text-amber-700">{fmt(detail.sellPrice)}</p></div>
+              <div className="p-3 rounded-xl" style={{background:detail.marginPercent>=60?'#dcfce7':detail.marginPercent>=40?'#fef9c3':'#fee2e2'}}><p className="text-xs" style={{color:detail.marginPercent>=60?'#166534':detail.marginPercent>=40?'#854d0e':'#991b1b'}}>Margin</p><p className="text-xl font-bold" style={{color:detail.marginPercent>=60?'#166534':detail.marginPercent>=40?'#854d0e':'#991b1b'}}>{detail.marginPercent}%</p></div></>}
+            </div>
+            <h4 className="font-semibold mb-2">Breakdown</h4>
+            <div className="border rounded-xl overflow-hidden">
+              {detail.breakdown?.map((item,i)=><div key={i} className="p-3 border-b flex justify-between items-center" style={{background:item.warning?'#fef2f2':'white'}}><div><p className="font-medium text-sm">{item.ingredientName}</p><p className="text-xs text-gray-500">{item.qty} {item.unit}{item.type==='dish'?' (comp)':''}</p></div><div className="text-right"><p className="font-semibold" style={{color:item.warning?'#dc2626':'#059669'}}>{item.warning?'⚠️':fmt(item.cost)}</p>{item.warning&&<p className="text-xs text-red-500">{item.warning}</p>}</div></div>)}
+            </div>
+          </div>
+        </div>
+      </div>}
+
+      <h2 className="text-lg font-bold text-gray-800">💵 Costing</h2>
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">Parameters</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="lbl">Lookback Days</label><select value={days} onChange={e=>setDays(parseInt(e.target.value))} className="inp"><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
+          <div><label className="lbl">Method</label><select value={method} onChange={e=>setMethod(e.target.value)} className="inp"><option>Highest</option><option>Average</option><option>Latest</option></select></div>
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={()=>setSub('dishes')} className={`btn flex-1 text-sm ${sub==='dishes'?'btn-p':'btn-s'}`}>🍳 Dish Costing</button>
+        <button onClick={()=>setSub('ingredients')} className={`btn flex-1 text-sm ${sub==='ingredients'?'btn-p':'btn-s'}`}>📊 Prices by Branch</button>
+      </div>
+
+      {sub==='dishes'&&<>
+        <div className="card p-4 space-y-3">
+          <h3 className="font-semibold text-gray-700">🍳 Quick Cost - Single Dish</h3>
+          <select value={selDish} onChange={e=>setSelDish(e.target.value)} className="inp">
+            <option value="">-- Select a dish --</option>
+            {dishes.map(d=><option key={d.MCODE} value={d.MCODE}>{d.Name} ({d.MCODE})</option>)}
+          </select>
+          <button onClick={calcSingle} disabled={loading||!selDish} className="btn btn-p w-full">{loading?'Calculating...':'⚡ Calculate Selected Dish'}</button>
+        </div>
+
+        <div className="card p-4">
+          <h3 className="font-semibold text-gray-700 mb-3">📊 Full Report - All Dishes</h3>
+          <p className="text-xs text-gray-500 mb-3">Calculates all {dishes.length} dishes. Takes 1-2 minutes.</p>
+          <button onClick={calcAll} disabled={loading} className="btn btn-s w-full">{loading?'Calculating...':'🔄 Calculate All Dishes'}</button>
+        </div>
+        {costs.length>0&&<>
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            <button onClick={()=>setFilterCat('All')} className={`px-3 py-1 rounded-full text-sm whitespace-nowrap ${filterCat==='All'?'bg-red-600 text-white':'bg-gray-200'}`}>All ({costs.length})</button>
+            {cats.map(cat=><button key={cat} onClick={()=>setFilterCat(cat)} className={`px-3 py-1 rounded-full text-sm whitespace-nowrap ${filterCat===cat?'bg-red-600 text-white':'bg-gray-200'}`}>{cat}</button>)}
+          </div>
+          <div className="card tbl-wrap">
+            <table className="w-full text-sm">
+              <thead><tr className="border-b bg-gray-50"><th className="p-3 text-left">Dish</th><th className="p-3 text-right">Cost</th><th className="p-3 text-right">Sell</th><th className="p-3 text-right">Margin</th></tr></thead>
+              <tbody>{filtCosts.map(d=><tr key={d.mcode} className="border-b hover:bg-gray-50 cursor-pointer" onClick={()=>viewDetail(d.mcode)}><td className="p-3"><p className="font-medium">{d.name}</p><p className="text-xs text-gray-500">{d.mcode}</p></td><td className="p-3 text-right font-medium text-green-700">{fmt(d.cost)}</td><td className="p-3 text-right">{d.sellPrice?fmt(d.sellPrice):'-'}</td><td className="p-3 text-right">{d.sellPrice>0?<span className={`font-semibold ${d.marginPercent>=60?'text-green-600':d.marginPercent>=40?'text-amber-600':'text-red-600'}`}>{d.marginPercent}%</span>:'-'}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </>}
+      </>}
+
+      {sub==='ingredients'&&<>
+        {priceDetail&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setPriceDetail(null)}>
+          <div className="bg-white rounded-2xl p-4 max-w-sm w-full fade" onClick={e=>e.stopPropagation()}>
+            <div className="flex justify-between items-start mb-3">
+              <div><h3 className="font-bold text-lg">{priceDetail.item}</h3><p className="text-sm text-gray-500">{priceDetail.branch}</p></div>
+              <button onClick={()=>setPriceDetail(null)} className="text-2xl text-gray-400">✕</button>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Unit Price</span><span className="font-bold text-green-700">{priceDetail.price}</span></div>
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Last Purchase</span><span className="font-medium">{priceDetail.lastDate}</span></div>
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Supplier</span><span className="font-medium">{priceDetail.supplier}</span></div>
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Purchase Count</span><span className="font-medium">{priceDetail.count}</span></div>
+            </div>
+          </div>
+        </div>}
+        <div className="flex gap-2">
+          <button onClick={loadPrices} disabled={loading} className="btn btn-p flex-1">{loading?'Loading...':'🔄 Load Prices'}</button>
+          {prices.length>0&&<button onClick={exportPrices} className="btn btn-s">📥 CSV</button>}
+        </div>
+        {prices.length>0&&<div className="card tbl-wrap">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left sticky left-0 bg-gray-50 z-10">Ingredient</th>{branches.map(b=><th key={b.BranchCode} className="p-2 text-right whitespace-nowrap">{b.BranchCode}</th>)}<th className="p-2 text-right">Avg</th></tr></thead>
+            <tbody>{prices.map((item,idx)=><tr key={idx} className="border-b">
+              <td className="p-2 sticky left-0 bg-white z-10"><p className="font-medium text-sm">{item.ItemName}</p><p className="text-xs text-gray-400">/{item.Unit}</p></td>
+              {branches.map(b=>{const p=item.branchPrices?.[b.BranchCode];const isLow=b.BranchCode===item.lowestBranch;const isHigh=b.BranchCode===item.highestBranch;const det=item.branchDetails?.[b.BranchCode];
+                return<td key={b.BranchCode} className={`p-2 text-right ${isLow?'low':isHigh?'high':''} ${det?'cursor-pointer active:bg-gray-100':''}`} onClick={()=>det&&setPriceDetail({item:item.ItemName,branch:b.BranchName,price:fmtPrice(p,item.Unit),lastDate:fmtDate(det.lastDate),supplier:det.lastSupplier||'-',count:det.purchaseCount})}>{p?<span className={det?'underline decoration-dotted':''}>{fmtPrice(p,item.Unit)}</span>:'-'}</td>})}
+              <td className="p-2 text-right font-medium">{item.avgPrice?fmtPrice(item.avgPrice,item.Unit):'-'}</td>
+            </tr>)}</tbody>
+          </table>
+          <div className="p-3 bg-gray-50 border-t text-xs text-gray-500"><span className="inline-block px-2 py-1 rounded mr-2 low">🟢 Lowest</span><span className="inline-block px-2 py-1 rounded high">🔴 Highest</span><span className="ml-4">👆 Tap price for details</span></div>
+        </div>}
+      </>}
+    </div>
+  );
+}
+
+function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
+  const[sub,setSub]=useState('daily');
+  const[dateRange,setDateRange]=useState({start:new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0],end:new Date().toISOString().split('T')[0]});
+  const[allPurchases,setAllPurchases]=useState([]);
+  const[allExpenses,setAllExpenses]=useState([]);
+  const[allCosts,setAllCosts]=useState([]);
+  const[loading,setLoading]=useState(false);
+
+  const loadData=async()=>{
+    setLoading(true);
+    try{
+      const days=Math.ceil((new Date(dateRange.end)-new Date(dateRange.start))/(24*60*60*1000))+1;
+      const[p,e]=await Promise.all([
+        api(apiUrl,'getPurchases',{branch:branch==='All'?'':branch,days}),
+        api(apiUrl,'getExpenses',{branch:branch==='All'?'':branch,days})
+      ]);
+      setAllPurchases((p.purchases||[]).filter(x=>x.PurchaseDate>=dateRange.start&&x.PurchaseDate<=dateRange.end));
+      setAllExpenses((e.expenses||[]).filter(x=>x.Date>=dateRange.start&&x.Date<=dateRange.end));
+    }catch(e){showToast(e.message,'error')}
+    finally{setLoading(false)}
+  };
+
+  const loadCosts=async()=>{
+    setLoading(true);
+    try{
+      const r=await api(apiUrl,'calculateAllDishCosts',{days:30,method:'Highest',branch:branch==='All'?'':branch});
+      setAllCosts(r.costs||[]);
+    }catch(e){showToast(e.message,'error')}
+    finally{setLoading(false)}
+  };
+
+  useEffect(()=>{loadData()},[dateRange,branch]);
+
+  // Helper functions
+  const groupBy=(arr,keyFn)=>{const m={};arr.forEach(x=>{const k=keyFn(x);if(!m[k])m[k]=[];m[k].push(x)});return m};
+  const sumBy=(arr,fn)=>arr.reduce((s,x)=>s+(fn(x)||0),0);
+
+  // Daily Summary Data
+  const dailyP=groupBy(allPurchases,p=>p.PurchaseDate);
+  const dailyE=groupBy(allExpenses,e=>e.Date);
+  const allDates=[...new Set([...Object.keys(dailyP),...Object.keys(dailyE)])].sort().reverse();
+  const dailyData=allDates.map(d=>({date:d,purchases:sumBy(dailyP[d]||[],x=>parseFloat(x.Price)),expenses:sumBy(dailyE[d]||[],x=>parseFloat(x.Amount)),pCount:(dailyP[d]||[]).length,eCount:(dailyE[d]||[]).length}));
+
+  // Weekly/Monthly Data
+  const getWeek=d=>{const dt=new Date(d);const start=new Date(dt);start.setDate(dt.getDate()-dt.getDay());return start.toISOString().split('T')[0]};
+  const getMonth=d=>d.substring(0,7);
+  const weeklyP=groupBy(allPurchases,p=>getWeek(p.PurchaseDate));
+  const weeklyE=groupBy(allExpenses,e=>getWeek(e.Date));
+  const monthlyP=groupBy(allPurchases,p=>getMonth(p.PurchaseDate));
+  const monthlyE=groupBy(allExpenses,e=>getMonth(e.Date));
+
+  // Branch Summary
+  const branchP=groupBy(allPurchases,p=>p.BranchCode||p.Branch);
+  const branchE=groupBy(allExpenses,e=>e.BranchCode||e.Branch);
+  const branchData=branches.map(b=>({code:b.BranchCode,name:b.BranchName,purchases:sumBy(branchP[b.BranchCode]||branchP[b.BranchName]||[],x=>parseFloat(x.Price)),expenses:sumBy(branchE[b.BranchCode]||branchE[b.BranchName]||[],x=>parseFloat(x.Amount))}));
+
+  // Top Ingredients
+  const ingTotals={};
+  allPurchases.forEach(p=>{const k=p.ItemName;if(!ingTotals[k])ingTotals[k]={name:k,qty:0,cost:0,count:0,unit:p.Unit};ingTotals[k].qty+=parseFloat(p.Qty)||0;ingTotals[k].cost+=parseFloat(p.Price)||0;ingTotals[k].count++});
+  const topIngByCost=Object.values(ingTotals).sort((a,b)=>b.cost-a.cost).slice(0,15);
+  const topIngByQty=Object.values(ingTotals).sort((a,b)=>b.qty-a.qty).slice(0,15);
+
+  // Price Trends
+  const priceTrends={};
+  allPurchases.forEach(p=>{const k=p.ItemName;if(!priceTrends[k])priceTrends[k]={name:k,unit:p.Unit,prices:[]};if(p.UnitPrice>0)priceTrends[k].prices.push({date:p.PurchaseDate,price:parseFloat(p.UnitPrice)})});
+  Object.values(priceTrends).forEach(t=>{t.prices.sort((a,b)=>a.date.localeCompare(b.date));if(t.prices.length>=2){t.first=t.prices[0].price;t.last=t.prices[t.prices.length-1].price;t.change=((t.last-t.first)/t.first*100).toFixed(1)}});
+  const priceAlerts=Object.values(priceTrends).filter(t=>t.change&&parseFloat(t.change)>10).sort((a,b)=>parseFloat(b.change)-parseFloat(a.change));
+
+  // Expense by Category
+  const expByCat=groupBy(allExpenses,e=>e.Category||'Other');
+  const catData=Object.entries(expByCat).map(([cat,items])=>({category:cat,total:sumBy(items,x=>parseFloat(x.Amount)),count:items.length})).sort((a,b)=>b.total-a.total);
+
+  // Expense by Payment
+  const expByPay=groupBy(allExpenses,e=>e.PayMethod||'Cash');
+  const payData=Object.entries(expByPay).map(([pay,items])=>({method:pay,total:sumBy(items,x=>parseFloat(x.Amount)),count:items.length})).sort((a,b)=>b.total-a.total);
+
+  // Dish Profitability
+  const profitDishes=[...allCosts].filter(d=>d.sellPrice>0).sort((a,b)=>b.marginPercent-a.marginPercent);
+  const lowMarginDishes=profitDishes.filter(d=>d.marginPercent<50);
+
+  const totalP=sumBy(allPurchases,x=>parseFloat(x.Price));
+  const totalE=sumBy(allExpenses,x=>parseFloat(x.Amount));
+
+  return(
+    <div className="space-y-4 fade">
+      <h2 className="text-lg font-bold text-gray-800">📈 Reports</h2>
+
+      <div className="card p-4">
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div><label className="lbl">From</label><input type="date" value={dateRange.start} onChange={e=>setDateRange({...dateRange,start:e.target.value})} className="inp"/></div>
+          <div><label className="lbl">To</label><input type="date" value={dateRange.end} onChange={e=>setDateRange({...dateRange,end:e.target.value})} className="inp"/></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-center">
+          <div className="p-3 bg-red-50 rounded-xl"><p className="text-xs text-red-600">Total Purchases</p><p className="text-xl font-bold text-red-700">{fmt(totalP)}</p></div>
+          <div className="p-3 bg-amber-50 rounded-xl"><p className="text-xs text-amber-600">Total Expenses</p><p className="text-xl font-bold text-amber-700">{fmt(totalE)}</p></div>
+        </div>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-2">
+        {[{id:'daily',l:'📅 Daily'},{id:'weekly',l:'📆 Weekly'},{id:'branch',l:'🏢 Branch'},{id:'topIng',l:'🥩 Top Items'},{id:'priceAlert',l:'🔴 Price Alerts'},{id:'expCat',l:'📂 Exp Category'},{id:'expPay',l:'💳 Exp Payment'},{id:'profit',l:'💰 Profitability'}].map(t=>
+          <button key={t.id} onClick={()=>{setSub(t.id);if(t.id==='profit'&&allCosts.length===0)loadCosts()}} className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${sub===t.id?'bg-red-600 text-white':'bg-gray-200'}`}>{t.l}</button>
+        )}
+      </div>
+
+      {loading&&<div className="text-center py-8"><div className="w-8 h-8 border-4 border-red-200 border-t-red-600 rounded-full spin mx-auto"/></div>}
+
+      {!loading&&sub==='daily'&&<div className="card">
+        <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📅 Daily Summary</div>
+        <div className="tbl-wrap"><table className="w-full text-sm">
+          <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Date</th><th className="p-2 text-right">Purchases</th><th className="p-2 text-right">Expenses</th><th className="p-2 text-right">Net</th></tr></thead>
+          <tbody>{dailyData.slice(0,30).map(d=><tr key={d.date} className="border-b"><td className="p-2">{fmtDate(d.date)}<span className="text-xs text-gray-400 ml-1">({d.pCount}p/{d.eCount}e)</span></td><td className="p-2 text-right text-red-600">{fmt(d.purchases)}</td><td className="p-2 text-right text-amber-600">{fmt(d.expenses)}</td><td className="p-2 text-right font-medium">{fmt(d.purchases+d.expenses)}</td></tr>)}</tbody>
+        </table></div>
+      </div>}
+
+      {!loading&&sub==='weekly'&&<div className="space-y-4">
+        <div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📆 Weekly Summary</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Week Starting</th><th className="p-2 text-right">Purchases</th><th className="p-2 text-right">Expenses</th></tr></thead>
+            <tbody>{[...new Set([...Object.keys(weeklyP),...Object.keys(weeklyE)])].sort().reverse().slice(0,12).map(w=><tr key={w} className="border-b"><td className="p-2">{fmtDate(w)}</td><td className="p-2 text-right text-red-600">{fmt(sumBy(weeklyP[w]||[],x=>parseFloat(x.Price)))}</td><td className="p-2 text-right text-amber-600">{fmt(sumBy(weeklyE[w]||[],x=>parseFloat(x.Amount)))}</td></tr>)}</tbody>
+          </table></div>
+        </div>
+        <div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📆 Monthly Summary</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Month</th><th className="p-2 text-right">Purchases</th><th className="p-2 text-right">Expenses</th></tr></thead>
+            <tbody>{[...new Set([...Object.keys(monthlyP),...Object.keys(monthlyE)])].sort().reverse().slice(0,12).map(m=><tr key={m} className="border-b"><td className="p-2">{m}</td><td className="p-2 text-right text-red-600">{fmt(sumBy(monthlyP[m]||[],x=>parseFloat(x.Price)))}</td><td className="p-2 text-right text-amber-600">{fmt(sumBy(monthlyE[m]||[],x=>parseFloat(x.Amount)))}</td></tr>)}</tbody>
+          </table></div>
+        </div>
+      </div>}
+
+      {!loading&&sub==='branch'&&<div className="card">
+        <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🏢 Branch Comparison</div>
+        <div className="tbl-wrap"><table className="w-full text-sm">
+          <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Branch</th><th className="p-2 text-right">Purchases</th><th className="p-2 text-right">Expenses</th><th className="p-2 text-right">Total</th></tr></thead>
+          <tbody>{branchData.map(b=><tr key={b.code} className="border-b"><td className="p-2"><span className="font-medium">{b.code}</span><span className="text-xs text-gray-400 ml-1 hidden sm:inline">{b.name}</span></td><td className="p-2 text-right text-red-600">{fmt(b.purchases)}</td><td className="p-2 text-right text-amber-600">{fmt(b.expenses)}</td><td className="p-2 text-right font-bold">{fmt(b.purchases+b.expenses)}</td></tr>)}</tbody>
+          <tfoot><tr className="bg-gray-100 font-bold"><td className="p-2">TOTAL</td><td className="p-2 text-right text-red-700">{fmt(sumBy(branchData,x=>x.purchases))}</td><td className="p-2 text-right text-amber-700">{fmt(sumBy(branchData,x=>x.expenses))}</td><td className="p-2 text-right">{fmt(sumBy(branchData,x=>x.purchases+x.expenses))}</td></tr></tfoot>
+        </table></div>
+      </div>}
+
+      {!loading&&sub==='topIng'&&<div className="space-y-4">
+        <div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🥩 Top Items by Cost</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Cost</th><th className="p-2 text-right">Purchases</th></tr></thead>
+            <tbody>{topIngByCost.map((ing,i)=><tr key={ing.name} className="border-b"><td className="p-2 text-gray-400">{i+1}</td><td className="p-2 font-medium">{ing.name}</td><td className="p-2 text-right text-red-600 font-bold">{fmt(ing.cost)}</td><td className="p-2 text-right text-gray-500">{ing.count}x</td></tr>)}</tbody>
+          </table></div>
+        </div>
+        <div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📦 Top Items by Quantity</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Qty</th><th className="p-2 text-right">Unit</th></tr></thead>
+            <tbody>{topIngByQty.map((ing,i)=><tr key={ing.name} className="border-b"><td className="p-2 text-gray-400">{i+1}</td><td className="p-2 font-medium">{ing.name}</td><td className="p-2 text-right font-bold">{ing.qty.toLocaleString()}</td><td className="p-2 text-right text-gray-500">{ing.unit}</td></tr>)}</tbody>
+          </table></div>
+        </div>
+      </div>}
+
+      {!loading&&sub==='priceAlert'&&<div className="card">
+        <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🔴 Price Increase Alerts (&gt;10%)</div>
+        {priceAlerts.length===0?<p className="p-8 text-center text-gray-400">No significant price increases</p>:
+        <div className="tbl-wrap"><table className="w-full text-sm">
+          <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Item</th><th className="p-2 text-right">First Price</th><th className="p-2 text-right">Latest Price</th><th className="p-2 text-right">Change</th></tr></thead>
+          <tbody>{priceAlerts.map(t=><tr key={t.name} className="border-b"><td className="p-2 font-medium">{t.name}<span className="text-xs text-gray-400 ml-1">/{t.unit}</span></td><td className="p-2 text-right text-gray-500">{t.first?.toFixed(2)}</td><td className="p-2 text-right font-medium">{t.last?.toFixed(2)}</td><td className="p-2 text-right"><span className="px-2 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">+{t.change}%</span></td></tr>)}</tbody>
+        </table></div>}
+      </div>}
+
+      {!loading&&sub==='expCat'&&<div className="card">
+        <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📂 Expenses by Category</div>
+        <div className="tbl-wrap"><table className="w-full text-sm">
+          <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Category</th><th className="p-2 text-right">Amount</th><th className="p-2 text-right">%</th><th className="p-2 text-right">Count</th></tr></thead>
+          <tbody>{catData.map(c=><tr key={c.category} className="border-b"><td className="p-2 font-medium">{c.category}</td><td className="p-2 text-right text-amber-600 font-bold">{fmt(c.total)}</td><td className="p-2 text-right text-gray-500">{totalE>0?(c.total/totalE*100).toFixed(1):0}%</td><td className="p-2 text-right text-gray-400">{c.count}</td></tr>)}</tbody>
+          <tfoot><tr className="bg-gray-100 font-bold"><td className="p-2">TOTAL</td><td className="p-2 text-right text-amber-700">{fmt(totalE)}</td><td className="p-2 text-right">100%</td><td className="p-2 text-right">{allExpenses.length}</td></tr></tfoot>
+        </table></div>
+      </div>}
+
+      {!loading&&sub==='expPay'&&<div className="card">
+        <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">💳 Expenses by Payment Method</div>
+        <div className="tbl-wrap"><table className="w-full text-sm">
+          <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Method</th><th className="p-2 text-right">Amount</th><th className="p-2 text-right">%</th><th className="p-2 text-right">Count</th></tr></thead>
+          <tbody>{payData.map(p=><tr key={p.method} className="border-b"><td className="p-2 font-medium">{p.method}</td><td className="p-2 text-right text-amber-600 font-bold">{fmt(p.total)}</td><td className="p-2 text-right text-gray-500">{totalE>0?(p.total/totalE*100).toFixed(1):0}%</td><td className="p-2 text-right text-gray-400">{p.count}</td></tr>)}</tbody>
+        </table></div>
+      </div>}
+
+      {!loading&&sub==='profit'&&<div className="space-y-4">
+        {allCosts.length===0?<div className="card p-8 text-center"><p className="text-gray-400 mb-4">Load dish costs first</p><button onClick={loadCosts} className="btn btn-p">🔄 Calculate All Dish Costs</button></div>:<>
+        <div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">💰 Most Profitable Dishes</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Dish</th><th className="p-2 text-right">Cost</th><th className="p-2 text-right">Price</th><th className="p-2 text-right">Margin</th></tr></thead>
+            <tbody>{profitDishes.slice(0,15).map(d=><tr key={d.mcode} className="border-b"><td className="p-2"><span className="font-medium">{d.name}</span><span className="text-xs text-gray-400 ml-1">{d.mcode}</span></td><td className="p-2 text-right text-gray-500">{fmt(d.cost)}</td><td className="p-2 text-right">{fmt(d.sellPrice)}</td><td className="p-2 text-right"><span className={`px-2 py-1 rounded-full text-xs font-bold ${d.marginPercent>=60?'bg-green-100 text-green-700':d.marginPercent>=40?'bg-amber-100 text-amber-700':'bg-red-100 text-red-700'}`}>{d.marginPercent}%</span></td></tr>)}</tbody>
+          </table></div>
+        </div>
+        {lowMarginDishes.length>0&&<div className="card">
+          <div className="p-3 border-b bg-red-50 font-semibold text-red-700">⚠️ Low Margin Alert (&lt;50%)</div>
+          <div className="tbl-wrap"><table className="w-full text-sm">
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Dish</th><th className="p-2 text-right">Cost</th><th className="p-2 text-right">Price</th><th className="p-2 text-right">Margin</th></tr></thead>
+            <tbody>{lowMarginDishes.map(d=><tr key={d.mcode} className="border-b bg-red-50/50"><td className="p-2"><span className="font-medium">{d.name}</span></td><td className="p-2 text-right text-gray-500">{fmt(d.cost)}</td><td className="p-2 text-right">{fmt(d.sellPrice)}</td><td className="p-2 text-right"><span className="px-2 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">{d.marginPercent}%</span></td></tr>)}</tbody>
+          </table></div>
+        </div>}
+        </>}
+      </div>}
+    </div>
+  );
+}
+
+function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToast,loadAll}){
+  const[tempUrl,setTempUrl]=useState(apiUrl);
+  const[archType,setArchType]=useState('Purchases');
+  const[archDays,setArchDays]=useState(365);
+  const[archPrev,setArchPrev]=useState(null);
+  const[archiving,setArchiving]=useState(false);
+  const[archLog,setArchLog]=useState([]);
+  const[branchList,setBranchList]=useState([]);
+  const[editBranch,setEditBranch]=useState(null);
+  const[newBranch,setNewBranch]=useState(null);
+  const[saving,setSaving]=useState(false);
+
+  const updateUrl=()=>{localStorage.setItem('dainty_api',tempUrl);setApiUrl(tempUrl);showToast('Updated!')};
+  const clearData=()=>{if(confirm('Disconnect?')){localStorage.clear();setReady(false)}};
+
+  const preview=async()=>{try{const r=await api(apiUrl,'getArchivePreview',{dataType:archType,days:archDays});setArchPrev(r)}catch(e){showToast(e.message,'error')}};
+  const doArchive=async()=>{if(!archPrev||archPrev.rowsToArchive===0)return;if(!confirm(`Delete ${archPrev.rowsToArchive} rows? Download backup first!`))return;setArchiving(true);try{const r=await api(apiUrl,'archiveData',{dataType:archType,days:archDays});showToast(`Archived ${r.rowsDeleted} rows!`);setArchPrev(null);loadAll();loadArchLog()}catch(e){showToast(e.message,'error')}finally{setArchiving(false)}};
+  const loadArchLog=async()=>{try{const r=await api(apiUrl,'getArchiveLog');setArchLog(r.logs||[])}catch(e){console.error(e)}};
+  const exportFull=async()=>{try{const r=await api(apiUrl,'exportData',{dataType:'Full'});const blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='dainty_backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();URL.revokeObjectURL(url);showToast('Downloaded!')}catch(e){showToast(e.message,'error')}};
+
+  const loadBranches=async()=>{try{const r=await api(apiUrl,'getBranchesAdmin');setBranchList(r.branches||[])}catch(e){console.error(e)}};
+  const saveBranch=async()=>{if(!editBranch)return;setSaving(true);try{await api(apiUrl,'updateBranch',{branchCode:editBranch.BranchCode,data:JSON.stringify({BranchName:editBranch.BranchName,Password:editBranch.Password,Active:editBranch.Active})});showToast('Saved!');setEditBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
+  const addBranch=async()=>{if(!newBranch?.BranchCode||!newBranch?.BranchName||!newBranch?.Password){showToast('Fill all fields','error');return}setSaving(true);try{await api(apiUrl,'addBranch',{data:JSON.stringify(newBranch)});showToast('Added!');setNewBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
+  const deleteBranch=async(code)=>{if(!confirm('Delete this branch?'))return;try{await api(apiUrl,'deleteBranch',{branchCode:code});showToast('Deleted!');loadBranches();loadAll()}catch(e){showToast(e.message,'error')}};
+
+  useEffect(()=>{loadArchLog();loadBranches()},[]);
+
+  return(
+    <div className="space-y-4 fade">
+      <h2 className="text-lg font-bold text-gray-800">⚙️ Settings</h2>
+
+      {/* Edit Branch Modal */}
+      {editBranch&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setEditBranch(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-sm w-full fade" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">✏️ Edit Branch</h3><button onClick={()=>setEditBranch(null)} className="text-2xl text-gray-400">✕</button></div>
+          <div className="space-y-3">
+            <div><label className="lbl">Branch Code</label><input value={editBranch.BranchCode} disabled className="inp bg-gray-100"/></div>
+            <div><label className="lbl">Branch Name</label><input value={editBranch.BranchName} onChange={e=>setEditBranch({...editBranch,BranchName:e.target.value})} className="inp"/></div>
+            <div><label className="lbl">Password</label><input value={editBranch.Password||''} onChange={e=>setEditBranch({...editBranch,Password:e.target.value})} className="inp" placeholder="Enter new password"/></div>
+            <div className="flex items-center gap-2"><input type="checkbox" checked={editBranch.Active==='Yes'} onChange={e=>setEditBranch({...editBranch,Active:e.target.checked?'Yes':'No'})} id="active"/><label htmlFor="active" className="text-sm">Active</label></div>
+            <button onClick={saveBranch} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'💾 Save'}</button>
+          </div>
+        </div>
+      </div>}
+
+      {/* Add Branch Modal */}
+      {newBranch&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setNewBranch(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-sm w-full fade" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">➕ Add Branch</h3><button onClick={()=>setNewBranch(null)} className="text-2xl text-gray-400">✕</button></div>
+          <div className="space-y-3">
+            <div><label className="lbl">Branch Code *</label><input value={newBranch.BranchCode||''} onChange={e=>setNewBranch({...newBranch,BranchCode:e.target.value.toUpperCase()})} className="inp" placeholder="e.g., DNM"/></div>
+            <div><label className="lbl">Branch Name *</label><input value={newBranch.BranchName||''} onChange={e=>setNewBranch({...newBranch,BranchName:e.target.value})} className="inp" placeholder="e.g., Dainty New Mall"/></div>
+            <div><label className="lbl">Password *</label><input value={newBranch.Password||''} onChange={e=>setNewBranch({...newBranch,Password:e.target.value})} className="inp" placeholder="Password for branch login"/></div>
+            <button onClick={addBranch} disabled={saving} className="btn btn-p w-full">{saving?'Adding...':'➕ Add Branch'}</button>
+          </div>
+        </div>
+      </div>}
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">📊 Database Status</h3>
+        <div className="space-y-2">
+          {Object.entries(rowCounts.counts||{}).map(([k,v])=><div key={k} className="flex justify-between items-center"><span className="text-sm text-gray-600">{k}</span><span className="font-medium">{(v||0).toLocaleString()}</span></div>)}
+          <div className="pt-2 border-t flex justify-between items-center"><span className="font-semibold">Total</span><span className="font-bold text-lg">{(rowCounts.total||0).toLocaleString()}</span></div>
+          <div className="mt-2"><div className="h-3 bg-gray-200 rounded-full overflow-hidden"><div className="h-full rounded-full transition-all" style={{width:`${rowCounts.percentUsed||0}%`,background:rowCounts.status==='critical'?'#dc2626':rowCounts.status==='warning'?'#f59e0b':'#10b981'}}/></div><p className="text-xs text-gray-500 mt-1">{rowCounts.percentUsed||0}% of {(rowCounts.maxRows||100000).toLocaleString()}</p></div>
+        </div>
+      </div>
+
+      <div className="card p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-gray-700">🏢 Branches & Passwords</h3>
+          <button onClick={()=>setNewBranch({BranchCode:'',BranchName:'',Password:''})} className="btn btn-p btn-sm">+ Add</button>
+        </div>
+        {branchList.length===0?<p className="text-gray-400 text-sm">No branches yet</p>:
+          branchList.map(b=>
+            <div key={b.BranchCode} className="py-3 border-b flex items-center">
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{b.BranchName}</span>
+                  {b.Active==='No'&&<span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600">Inactive</span>}
+                </div>
+                <p className="text-xs text-gray-500">{b.BranchCode} • Password: {b.Password?'••••••':'(not set)'}</p>
+              </div>
+              <button onClick={()=>setEditBranch({...b})} className="text-blue-500 p-2">✏️</button>
+              <button onClick={()=>deleteBranch(b.BranchCode)} className="text-red-500 p-2">🗑️</button>
+            </div>
+          )}
+      </div>
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">📦 Archive Old Data</h3>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div><label className="lbl">Data Type</label><select value={archType} onChange={e=>{setArchType(e.target.value);setArchPrev(null)}} className="inp"><option>Purchases</option><option>Expenses</option></select></div>
+          <div><label className="lbl">Older Than</label><select value={archDays} onChange={e=>{setArchDays(parseInt(e.target.value));setArchPrev(null)}} className="inp"><option value="30">30 days</option><option value="90">90 days</option><option value="180">180 days</option><option value="365">1 year</option></select></div>
+        </div>
+        <button onClick={preview} className="btn btn-s w-full mb-3">Preview</button>
+        {archPrev&&<div className="p-3 bg-amber-50 rounded-xl mb-3"><p className="text-sm text-amber-800"><strong>{archPrev.rowsToArchive.toLocaleString()}</strong> rows will be deleted{archPrev.dateRange?.start&&<span className="block text-xs mt-1">{archPrev.dateRange.start} to {archPrev.dateRange.end}</span>}</p></div>}
+        {archPrev&&archPrev.rowsToArchive>0&&<button onClick={doArchive} disabled={archiving} className="btn w-full text-white" style={{background:'#dc2626'}}>{archiving?'Archiving...':`🗑️ Delete ${archPrev.rowsToArchive} Rows`}</button>}
+        {archLog.length>0&&<div className="mt-4 pt-4 border-t"><p className="text-xs font-semibold text-gray-500 mb-2">History</p>{archLog.slice(0,5).map((l,i)=><p key={i} className="text-xs text-gray-500">{fmtDate(l.ArchiveDate)}: {l.DataType} - {l.RowsArchived} rows</p>)}</div>}
+      </div>
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">📤 Export</h3>
+        <button onClick={exportFull} className="btn btn-s w-full">📥 Full Backup (JSON)</button>
+      </div>
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">🔗 API Connection</h3>
+        <input value={tempUrl} onChange={e=>setTempUrl(e.target.value)} className="inp text-xs mb-3"/>
+        <button onClick={updateUrl} className="btn btn-s w-full">Update URL</button>
+      </div>
+
+      <div className="card p-4">
+        <h3 className="font-semibold text-gray-700 mb-3">🔧 System Settings</h3>
+        {Object.entries(settings).map(([k,v])=><div key={k} className="py-2 border-b"><p className="font-medium text-sm">{k}</p><p className="text-xs text-gray-500">{v}</p></div>)}
+        <p className="text-xs text-gray-400 mt-3">Edit in Google Sheet → Settings tab</p>
+      </div>
+
+      <div className="card p-4 border-2 border-red-200">
+        <h3 className="font-semibold text-red-600 mb-3">⚠️ Danger Zone</h3>
+        <button onClick={clearData} className="btn w-full border-2 border-red-300 text-red-600 bg-red-50">Disconnect & Clear Local Data</button>
+        <p className="text-xs text-gray-400 mt-2">This only clears browser data. Google Sheet is safe.</p>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
