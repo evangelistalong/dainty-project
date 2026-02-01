@@ -33,7 +33,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useEffect,useCallback}=React;
+const{useState,useEffect,useCallback,useMemo}=React;
 
 async function api(url,action,params={}){
   if(!url)throw new Error('API URL not set');
@@ -324,17 +324,21 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
   // Get unique categories
   const categories=['All',...new Set(purchases.map(p=>p.Category).filter(Boolean))];
   
-  // Filter and sort
-  let filtered=purchases;
-  if(filterCat!=='All')filtered=filtered.filter(p=>p.Category===filterCat);
-  if(search)filtered=filtered.filter(p=>(p.ItemName||'').toLowerCase().includes(search.toLowerCase()));
-  filtered=[...filtered].sort((a,b)=>{
-    let cmp=0;
-    if(sortBy==='date')cmp=new Date(a.PurchaseDate)-new Date(b.PurchaseDate);
-    else if(sortBy==='price')cmp=(parseFloat(a.Price)||0)-(parseFloat(b.Price)||0);
-    else if(sortBy==='item')cmp=(a.ItemName||'').localeCompare(b.ItemName||'');
-    return sortDir==='desc'?-cmp:cmp;
-  });
+  // Filter and sort - compute fresh on every render
+  const getFiltered=()=>{
+    let result=purchases.slice();
+    if(filterCat!=='All')result=result.filter(p=>p.Category===filterCat);
+    if(search.trim()!=='')result=result.filter(p=>p.ItemName&&p.ItemName.toLowerCase().indexOf(search.toLowerCase().trim())!==-1);
+    result.sort((a,b)=>{
+      let cmp=0;
+      if(sortBy==='date')cmp=new Date(a.PurchaseDate)-new Date(b.PurchaseDate);
+      else if(sortBy==='price')cmp=(parseFloat(a.Price)||0)-(parseFloat(b.Price)||0);
+      else if(sortBy==='item')cmp=(a.ItemName||'').localeCompare(b.ItemName||'');
+      return sortDir==='desc'?-cmp:cmp;
+    });
+    return result;
+  };
+  const filtered=getFiltered();
 
   return(
     <div className="space-y-4 fade">
@@ -389,9 +393,9 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
             <button onClick={()=>setSortDir(sortDir==='desc'?'asc':'desc')} className="text-sm border rounded-lg px-2 py-1 bg-white">{sortDir==='desc'?'↓':'↑'}</button>
           </div>
         </div>
-        <div className="max-h-96 overflow-y-auto">
+        <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No purchases</p>:
-            filtered.slice(0,50).map(p=><div key={p.UniqueID} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
+            filtered.slice(0,50).map((p,idx)=><div key={p.UniqueID+'_'+idx} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
         </div>
       </div>
     </div>
@@ -426,17 +430,21 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
   // Get unique categories for filter
   const categories=['All',...new Set(expenses.map(e=>e.Category).filter(Boolean))];
   
-  // Filter and sort
-  let filtered=expenses;
-  if(filterCat!=='All')filtered=filtered.filter(e=>e.Category===filterCat);
-  if(search)filtered=filtered.filter(e=>(e.Description||'').toLowerCase().includes(search.toLowerCase())||(e.Vendor||'').toLowerCase().includes(search.toLowerCase()));
-  filtered=[...filtered].sort((a,b)=>{
-    let cmp=0;
-    if(sortBy==='date')cmp=new Date(a.Date)-new Date(b.Date);
-    else if(sortBy==='amount')cmp=(parseFloat(a.Amount)||0)-(parseFloat(b.Amount)||0);
-    else if(sortBy==='desc')cmp=(a.Description||'').localeCompare(b.Description||'');
-    return sortDir==='desc'?-cmp:cmp;
-  });
+  // Filter and sort - compute fresh on every render
+  const getFiltered=()=>{
+    let result=expenses.slice();
+    if(filterCat!=='All')result=result.filter(e=>e.Category===filterCat);
+    if(search.trim()!=='')result=result.filter(e=>(e.Description&&e.Description.toLowerCase().indexOf(search.toLowerCase().trim())!==-1)||(e.Vendor&&e.Vendor.toLowerCase().indexOf(search.toLowerCase().trim())!==-1));
+    result.sort((a,b)=>{
+      let cmp=0;
+      if(sortBy==='date')cmp=new Date(a.Date)-new Date(b.Date);
+      else if(sortBy==='amount')cmp=(parseFloat(a.Amount)||0)-(parseFloat(b.Amount)||0);
+      else if(sortBy==='desc')cmp=(a.Description||'').localeCompare(b.Description||'');
+      return sortDir==='desc'?-cmp:cmp;
+    });
+    return result;
+  };
+  const filtered=getFiltered();
 
   return(
     <div className="space-y-4 fade">
@@ -485,9 +493,9 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
             <button onClick={()=>setSortDir(sortDir==='desc'?'asc':'desc')} className="text-sm border rounded-lg px-2 py-1 bg-white">{sortDir==='desc'?'↓':'↑'}</button>
           </div>
         </div>
-        <div className="max-h-96 overflow-y-auto">
+        <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No expenses</p>:
-            filtered.slice(0,50).map(e=><div key={e.UniqueID} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode} • {fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
+            filtered.slice(0,50).map((e,idx)=><div key={e.UniqueID+'_'+idx} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode} • {fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
         </div>
       </div>
     </div>
