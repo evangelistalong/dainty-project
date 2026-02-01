@@ -296,6 +296,7 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
   const[selBr,setSelBr]=useState(branch==='All'?(branches[0]?.BranchName||''):branch);
   const[form,setForm]=useState({PurchaseDate:new Date().toISOString().split('T')[0],Supplier:'',items:[{ItemName:'',Qty:'',Unit:'kg',Price:''}]});
   const[filterCat,setFilterCat]=useState('All');
+  const[search,setSearch]=useState('');
   const[sortBy,setSortBy]=useState('date');
   const[sortDir,setSortDir]=useState('desc');
   useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
@@ -324,7 +325,9 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
   const categories=['All',...new Set(purchases.map(p=>p.Category).filter(Boolean))];
   
   // Filter and sort
-  let filtered=filterCat==='All'?purchases:purchases.filter(p=>p.Category===filterCat);
+  let filtered=purchases;
+  if(filterCat!=='All')filtered=filtered.filter(p=>p.Category===filterCat);
+  if(search)filtered=filtered.filter(p=>(p.ItemName||'').toLowerCase().includes(search.toLowerCase()));
   filtered=[...filtered].sort((a,b)=>{
     let cmp=0;
     if(sortBy==='date')cmp=new Date(a.PurchaseDate)-new Date(b.PurchaseDate);
@@ -371,6 +374,9 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
             <span className="font-semibold text-gray-700">Recent (30 days)</span>
             <span className="text-sm text-gray-500">{filtered.length} items</span>
           </div>
+          <div className="mb-2">
+            <input value={search} onChange={e=>setSearch(e.target.value)} className="inp" placeholder="🔍 Search ingredient..."/>
+          </div>
           <div className="flex gap-2 flex-wrap">
             <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="text-sm border rounded-lg px-2 py-1 bg-white">
               {categories.map(c=><option key={c} value={c}>{c==='All'?'All Categories':c}</option>)}
@@ -385,7 +391,7 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
         </div>
         <div className="max-h-96 overflow-y-auto">
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No purchases</p>:
-            filtered.slice(0,50).map(p=><div key={p.UniqueID} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
+            filtered.slice(0,50).map(p=><div key={p.UniqueID} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode} • {fmtDate(p.PurchaseDate)}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
         </div>
       </div>
     </div>
@@ -399,6 +405,7 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
   const[form,setForm]=useState({Date:new Date().toISOString().split('T')[0],Category:'Utilities',Vendor:'',PayMethod:'Cash',Amount:'',Description:''});
   const[viewPhoto,setViewPhoto]=useState(null);
   const[filterCat,setFilterCat]=useState('All');
+  const[search,setSearch]=useState('');
   const[sortBy,setSortBy]=useState('date');
   const[sortDir,setSortDir]=useState('desc');
   useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
@@ -420,7 +427,9 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
   const categories=['All',...new Set(expenses.map(e=>e.Category).filter(Boolean))];
   
   // Filter and sort
-  let filtered=filterCat==='All'?expenses:expenses.filter(e=>e.Category===filterCat);
+  let filtered=expenses;
+  if(filterCat!=='All')filtered=filtered.filter(e=>e.Category===filterCat);
+  if(search)filtered=filtered.filter(e=>(e.Description||'').toLowerCase().includes(search.toLowerCase())||(e.Vendor||'').toLowerCase().includes(search.toLowerCase()));
   filtered=[...filtered].sort((a,b)=>{
     let cmp=0;
     if(sortBy==='date')cmp=new Date(a.Date)-new Date(b.Date);
@@ -460,6 +469,9 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
           <div className="flex justify-between items-center mb-2">
             <span className="font-semibold text-gray-700">Recent (30 days)</span>
             <span className="text-sm text-gray-500">{filtered.length} items</span>
+          </div>
+          <div className="mb-2">
+            <input value={search} onChange={e=>setSearch(e.target.value)} className="inp" placeholder="🔍 Search description or vendor..."/>
           </div>
           <div className="flex gap-2 flex-wrap">
             <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="text-sm border rounded-lg px-2 py-1 bg-white">
