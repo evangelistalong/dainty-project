@@ -235,7 +235,7 @@ function App(){
       </div>}
 
       <main className="p-4">
-        {tab==='dashboard'&&<Dashboard purchases={purchases} expenses={expenses} dishes={dishes} rowCounts={rowCounts}/>}
+        {tab==='dashboard'&&<Dashboard purchases={purchases} expenses={expenses} dishes={dishes} rowCounts={rowCounts} setTab={setTab} branch={branch}/>}
         {tab==='ai'&&<AIAssistant apiUrl={apiUrl} purchases={purchases} expenses={expenses} ingredients={ingredients} dishes={dishes} showToast={showToast}/>}
         {tab==='purchases'&&<Purchases apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} purchases={purchases} showToast={showToast} loadTx={loadTx}/>}
         {tab==='expenses'&&<Expenses apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} expenses={expenses} showToast={showToast} loadTx={loadTx}/>}
@@ -249,7 +249,7 @@ function App(){
   );
 }
 
-function Dashboard({purchases,expenses,dishes,rowCounts}){
+function Dashboard({purchases,expenses,dishes,rowCounts,setTab}){
   // Use local date, not UTC
   const todayDate=new Date();
   const today=todayDate.getFullYear()+'-'+String(todayDate.getMonth()+1).padStart(2,'0')+'-'+String(todayDate.getDate()).padStart(2,'0');
@@ -258,7 +258,6 @@ function Dashboard({purchases,expenses,dishes,rowCounts}){
   const normalizeDate=(d)=>{
     if(!d)return '';
     if(typeof d==='string'){
-      // Handle ISO string or date string
       return d.split('T')[0];
     }
     if(d instanceof Date || (d && d.getFullYear)){
@@ -271,48 +270,199 @@ function Dashboard({purchases,expenses,dishes,rowCounts}){
   const te=expenses.filter(e=>normalizeDate(e.Date)===today);
   const tpT=tp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
   const teT=te.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
-  const week=new Date();week.setDate(week.getDate()-7);
-  const wp=purchases.filter(p=>new Date(p.PurchaseDate)>=week);
-  const we=expenses.filter(e=>new Date(e.Date)>=week);
-  const wpT=wp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
-  const weT=we.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
+  
+  // This month stats
+  const monthStart=new Date(todayDate.getFullYear(),todayDate.getMonth(),1);
+  const mp=purchases.filter(p=>new Date(p.PurchaseDate)>=monthStart);
+  const me=expenses.filter(e=>new Date(e.Date)>=monthStart);
+  const mpT=mp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
+  const meT=me.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
+  
+  // Selected item for detail modal
+  const[selectedItem,setSelectedItem]=useState(null);
+  
+  // Combine today's activity
+  const todayActivity=[
+    ...tp.map(p=>({...p,_type:'purchase'})),
+    ...te.map(e=>({...e,_type:'expense'}))
+  ];
 
   return(
     <div className="space-y-4 fade">
+      {/* Detail Modal */}
+      {selectedItem&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setSelectedItem(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-md w-full fade max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-gray-800">{selectedItem._type==='purchase'?'🛒 Purchase Details':'💰 Expense Details'}</h3>
+            <button onClick={()=>setSelectedItem(null)} className="text-2xl text-gray-400">✕</button>
+          </div>
+          
+          {selectedItem._type==='purchase'?(
+            <div className="space-y-3">
+              <div className="p-3 bg-red-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Item</p>
+                <p className="text-lg font-bold text-red-800">{selectedItem.ItemName}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Total Price</p>
+                  <p className="text-xl font-bold text-red-700">{fmt(selectedItem.Price)}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">Quantity</p>
+                  <p className="text-xl font-bold text-gray-800">{selectedItem.Qty} {selectedItem.ContainerType||selectedItem.Unit}</p>
+                </div>
+              </div>
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Price per {selectedItem.ContainerType||selectedItem.Unit||'unit'}</p>
+                <p className="text-lg font-bold text-blue-700">₱{((parseFloat(selectedItem.Price)||0)/(parseFloat(selectedItem.Qty)||1)).toFixed(2)} / {selectedItem.ContainerType||selectedItem.Unit||'unit'}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📅 Date</p>
+                  <p className="font-medium text-gray-800">{fmtDate(selectedItem.PurchaseDate)}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏪 Branch</p>
+                  <p className="font-medium text-gray-800">{selectedItem.BranchCode||'-'}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📦 Category</p>
+                  <p className="font-medium text-gray-800">{selectedItem.Category||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🚚 Supplier</p>
+                  <p className="font-medium text-gray-800">{selectedItem.Supplier||'-'}</p>
+                </div>
+              </div>
+            </div>
+          ):(
+            <div className="space-y-3">
+              <div className="p-3 bg-amber-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Description</p>
+                <p className="text-lg font-bold text-amber-800">{selectedItem.Description}</p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Amount</p>
+                <p className="text-2xl font-bold text-amber-600">{fmt(selectedItem.Amount)}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📅 Date</p>
+                  <p className="font-medium text-gray-800">{fmtDate(selectedItem.Date)}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏪 Branch</p>
+                  <p className="font-medium text-gray-800">{selectedItem.BranchCode||'-'}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📦 Category</p>
+                  <p className="font-medium text-gray-800">{selectedItem.Category||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏢 Vendor</p>
+                  <p className="font-medium text-gray-800">{selectedItem.Vendor||'-'}</p>
+                </div>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">💳 Payment Method</p>
+                <p className="font-medium text-gray-800">{selectedItem.PayMethod||'-'}</p>
+              </div>
+            </div>
+          )}
+          
+          <button onClick={()=>setSelectedItem(null)} className="btn btn-p w-full mt-4">Close</button>
+        </div>
+      </div>}
+      
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-gray-800">📊 Dashboard</h2>
         <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">💾 {(rowCounts.total||0).toLocaleString()} rows ({rowCounts.percentUsed||0}%)</span>
       </div>
+      
+      {/* Today's Stats - Clickable */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="card p-4" style={{background:'linear-gradient(135deg,#dc2626,#b91c1c)'}}><p className="text-white/80 text-xs">Today's Purchases</p><p className="text-white text-2xl font-bold mt-1">{fmt(tpT)}</p><p className="text-white/60 text-xs mt-1">{tp.length} items</p></div>
-        <div className="card p-4" style={{background:'linear-gradient(135deg,#f59e0b,#d97706)'}}><p className="text-white/80 text-xs">Today's Expenses</p><p className="text-white text-2xl font-bold mt-1">{fmt(teT)}</p><p className="text-white/60 text-xs mt-1">{te.length} items</p></div>
+        <div onClick={()=>setTab('purchases')} className="card p-4 cursor-pointer hover:scale-[1.02] transition-transform active:scale-[0.98]" style={{background:'linear-gradient(135deg,#dc2626,#b91c1c)'}}>
+          <p className="text-white/80 text-xs">Today's Purchases</p>
+          <p className="text-white text-2xl font-bold mt-1">{fmt(tpT)}</p>
+          <p className="text-white/60 text-xs mt-1">{tp.length} items • Tap to view →</p>
+        </div>
+        <div onClick={()=>setTab('expenses')} className="card p-4 cursor-pointer hover:scale-[1.02] transition-transform active:scale-[0.98]" style={{background:'linear-gradient(135deg,#f59e0b,#d97706)'}}>
+          <p className="text-white/80 text-xs">Today's Expenses</p>
+          <p className="text-white text-2xl font-bold mt-1">{fmt(teT)}</p>
+          <p className="text-white/60 text-xs mt-1">{te.length} items • Tap to view →</p>
+        </div>
       </div>
+      
+      {/* This Month Summary */}
       <div className="card p-4">
-        <h3 className="font-semibold text-gray-700 mb-3">📅 Last 7 Days</h3>
+        <h3 className="font-semibold text-gray-700 mb-3">📅 This Month</h3>
         <div className="grid grid-cols-2 gap-4">
-          <div><p className="text-xs text-gray-500">Purchases</p><p className="text-xl font-bold text-red-600">{fmt(wpT)}</p><p className="text-xs text-gray-400">{wp.length} transactions</p></div>
-          <div><p className="text-xs text-gray-500">Expenses</p><p className="text-xl font-bold text-amber-600">{fmt(weT)}</p><p className="text-xs text-gray-400">{we.length} transactions</p></div>
+          <div className="p-3 bg-red-50 rounded-xl">
+            <p className="text-xs text-gray-500">Purchases</p>
+            <p className="text-xl font-bold text-red-600">{fmt(mpT)}</p>
+            <p className="text-xs text-gray-400">{mp.length} transactions</p>
+          </div>
+          <div className="p-3 bg-amber-50 rounded-xl">
+            <p className="text-xs text-gray-500">Expenses</p>
+            <p className="text-xl font-bold text-amber-600">{fmt(meT)}</p>
+            <p className="text-xs text-gray-400">{me.length} transactions</p>
+          </div>
         </div>
       </div>
+      
+      {/* Overview Stats */}
       <div className="card p-4">
-        <h3 className="font-semibold text-gray-700 mb-3">📈 Overview</h3>
+        <h3 className="font-semibold text-gray-700 mb-3">📈 Total Records (30 days)</h3>
         <div className="grid grid-cols-3 gap-3">
-          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{purchases.length}</p><p className="text-xs text-gray-500">Purchases</p></div>
-          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{expenses.length}</p><p className="text-xs text-gray-500">Expenses</p></div>
-          <div className="text-center p-3 bg-gray-50 rounded-xl"><p className="text-2xl font-bold text-gray-800">{dishes.length}</p><p className="text-xs text-gray-500">Dishes</p></div>
+          <div onClick={()=>setTab('purchases')} className="text-center p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition">
+            <p className="text-2xl font-bold text-gray-800">{purchases.length}</p>
+            <p className="text-xs text-gray-500">Purchases</p>
+          </div>
+          <div onClick={()=>setTab('expenses')} className="text-center p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition">
+            <p className="text-2xl font-bold text-gray-800">{expenses.length}</p>
+            <p className="text-xs text-gray-500">Expenses</p>
+          </div>
+          <div onClick={()=>setTab('dishes')} className="text-center p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition">
+            <p className="text-2xl font-bold text-gray-800">{dishes.length}</p>
+            <p className="text-xs text-gray-500">Dishes</p>
+          </div>
         </div>
       </div>
+      
+      {/* Today's Activity - Expanded & Clickable */}
       <div className="card">
-        <div className="p-4 border-b bg-gray-50"><h3 className="font-semibold text-gray-700">🕐 Today's Activity</h3></div>
-        <div className="max-h-64 overflow-y-auto">
-          {[...tp.map(p=>({...p,_t:'p',_a:p.Price,_d:p.ItemName})),...te.map(e=>({...e,_t:'e',_a:e.Amount,_d:e.Description}))].slice(0,10).map((x,i)=>
-            <div key={i} className="p-3 border-b flex items-center gap-3">
-              <span className="text-xl">{x._t==='p'?'🛒':'💰'}</span>
-              <div className="flex-1 min-w-0"><p className="font-medium text-sm truncate">{x._d}</p><p className="text-xs text-gray-500">{x.BranchCode}</p></div>
-              <span className="font-bold text-sm" style={{color:x._t==='p'?'#dc2626':'#d97706'}}>{fmt(x._a)}</span>
-            </div>
-          )}
-          {tp.length===0&&te.length===0&&<p className="p-8 text-center text-gray-400">No activity today</p>}
+        <div className="p-4 border-b bg-gray-50">
+          <div className="flex justify-between items-center">
+            <h3 className="font-semibold text-gray-700">🕐 Today's Activity</h3>
+            <span className="text-xs text-gray-500">{todayActivity.length} items</span>
+          </div>
+        </div>
+        <div className="max-h-[400px] overflow-y-auto">
+          {todayActivity.length===0?<p className="p-8 text-center text-gray-400">No activity today</p>:
+            todayActivity.map((item,i)=>(
+              <div key={item.UniqueID||i} onClick={()=>setSelectedItem(item)} className="p-4 border-b flex items-center gap-3 cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition">
+                <span className="text-2xl">{item._type==='purchase'?'🛒':'💰'}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{item._type==='purchase'?item.ItemName:item.Description}</p>
+                  <p className="text-xs text-gray-500">
+                    {item._type==='purchase'
+                      ?`${item.Qty} ${item.ContainerType||item.Unit} • ${item.Category||'No category'} • ${item.BranchCode}`
+                      :`${item.Category} • ${item.BranchCode}`
+                    }
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="font-bold text-sm" style={{color:item._type==='purchase'?'#dc2626':'#d97706'}}>{fmt(item._type==='purchase'?item.Price:item.Amount)}</span>
+                </div>
+                <span className="text-gray-400">›</span>
+              </div>
+            ))
+          }
         </div>
       </div>
     </div>
@@ -886,6 +1036,9 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
   const[search,setSearch]=useState('');
   const[sortBy,setSortBy]=useState('date');
   const[sortDir,setSortDir]=useState('desc');
+  const[selectedExpense,setSelectedExpense]=useState(null);
+  const[editMode,setEditMode]=useState(false);
+  const[editForm,setEditForm]=useState({});
   useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
 
   const submit=async()=>{
@@ -895,6 +1048,44 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
     try{
       await api(apiUrl,'addExpense',{data:{...form,Branch:selBr}});
       showToast('Added!');setForm({...form,Vendor:'',Amount:'',Description:''});setShow(false);loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
+  const startEdit=()=>{
+    setEditForm({
+      Description:selectedExpense.Description||'',
+      Amount:selectedExpense.Amount||'',
+      Category:selectedExpense.Category||'Utilities',
+      Vendor:selectedExpense.Vendor||'',
+      PayMethod:selectedExpense.PayMethod||'Cash',
+      Date:selectedExpense.Date?String(selectedExpense.Date).split('T')[0]:''
+    });
+    setEditMode(true);
+  };
+
+  const saveEdit=async()=>{
+    if(!editForm.Description||!editForm.Amount){showToast('Fill required fields','error');return}
+    setSaving(true);
+    try{
+      await api(apiUrl,'updateExpense',{
+        uniqueId:selectedExpense.UniqueID,
+        data:editForm
+      });
+      showToast('Updated!');
+      setEditMode(false);
+      setSelectedExpense(null);
+      loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
+  const deleteExpense=async()=>{
+    if(!confirm('Delete this expense? This cannot be undone.'))return;
+    setSaving(true);
+    try{
+      await api(apiUrl,'deleteExpense',{uniqueId:selectedExpense.UniqueID});
+      showToast('Deleted!');
+      setSelectedExpense(null);
+      loadTx();
     }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
   };
 
@@ -922,7 +1113,127 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
 
   return(
     <div className="space-y-4 fade">
+      {/* Photo Viewer */}
       {viewPhoto&&<div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={()=>setViewPhoto(null)}><div className="max-w-lg w-full"><img src={viewPhoto} alt="Receipt" className="w-full rounded-lg"/><p className="text-center text-white mt-2 text-sm">Tap to close</p></div></div>}
+      
+      {/* Expense Detail Modal */}
+      {selectedExpense&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>{setSelectedExpense(null);setEditMode(false)}}>
+        <div className="bg-white rounded-2xl p-4 max-w-md w-full fade max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-gray-800">{editMode?'✏️ Edit Expense':'💰 Expense Details'}</h3>
+            <button onClick={()=>{setSelectedExpense(null);setEditMode(false)}} className="text-2xl text-gray-400">✕</button>
+          </div>
+          
+          {editMode?(
+            <div className="space-y-3">
+              <div>
+                <label className="lbl">Description *</label>
+                <input value={editForm.Description} onChange={e=>setEditForm({...editForm,Description:e.target.value})} className="inp"/>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="lbl">Amount *</label>
+                  <input type="number" value={editForm.Amount} onChange={e=>setEditForm({...editForm,Amount:e.target.value})} className="inp" step="0.01"/>
+                </div>
+                <div>
+                  <label className="lbl">Category</label>
+                  <select value={editForm.Category} onChange={e=>setEditForm({...editForm,Category:e.target.value})} className="inp">
+                    {cats.map(c=><option key={c} value={c.trim()}>{c.trim()}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="lbl">Vendor</label>
+                  <input value={editForm.Vendor} onChange={e=>setEditForm({...editForm,Vendor:e.target.value})} className="inp"/>
+                </div>
+                <div>
+                  <label className="lbl">Payment Method</label>
+                  <select value={editForm.PayMethod} onChange={e=>setEditForm({...editForm,PayMethod:e.target.value})} className="inp">
+                    {pays.map(m=><option key={m} value={m.trim()}>{m.trim()}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="lbl">Date</label>
+                <input type="date" value={editForm.Date} onChange={e=>setEditForm({...editForm,Date:e.target.value})} className="inp"/>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={()=>setEditMode(false)} className="btn btn-s flex-1">Cancel</button>
+                <button onClick={saveEdit} disabled={saving} className="btn btn-p flex-1">{saving?'Saving...':'💾 Save'}</button>
+              </div>
+            </div>
+          ):(
+            <div className="space-y-3">
+              {/* Description */}
+              <div className="p-3 bg-amber-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Description</p>
+                <p className="text-lg font-bold text-amber-800">{selectedExpense.Description}</p>
+              </div>
+              
+              {/* Amount */}
+              <div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Amount</p>
+                <p className="text-2xl font-bold text-amber-600">{fmt(selectedExpense.Amount)}</p>
+              </div>
+              
+              {/* Details Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📅 Date</p>
+                  <p className="font-medium text-gray-800">{fmtDate(selectedExpense.Date)}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏪 Branch</p>
+                  <p className="font-medium text-gray-800">{selectedExpense.BranchCode||selectedExpense.Branch||'-'}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📦 Category</p>
+                  <p className="font-medium text-gray-800">{selectedExpense.Category||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏢 Vendor</p>
+                  <p className="font-medium text-gray-800">{selectedExpense.Vendor||'-'}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">💳 Payment Method</p>
+                  <p className="font-medium text-gray-800">{selectedExpense.PayMethod||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📝 Reference</p>
+                  <p className="font-medium text-gray-800">{selectedExpense.Reference||'-'}</p>
+                </div>
+              </div>
+              
+              {/* Receipt Photo */}
+              {selectedExpense.ReceiptPhoto&&<div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-2">🧾 Receipt Photo</p>
+                <img src={selectedExpense.ReceiptPhoto} alt="Receipt" className="w-full rounded-lg cursor-pointer" onClick={()=>setViewPhoto(selectedExpense.ReceiptPhoto)}/>
+              </div>}
+              
+              {/* UniqueID */}
+              <div className="p-3 bg-gray-100 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">ID</p>
+                <p className="font-mono text-xs text-gray-600 break-all">{selectedExpense.UniqueID||'-'}</p>
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-2">
+                <button onClick={deleteExpense} disabled={saving} className="btn bg-gray-200 text-gray-700 flex-1">🗑️ Delete</button>
+                <button onClick={startEdit} className="btn btn-s flex-1">✏️ Edit</button>
+                <button onClick={()=>setSelectedExpense(null)} className="btn btn-p flex-1">Close</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>}
+      
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">💰 Expenses</h2>
         <div className="flex gap-2">
@@ -969,7 +1280,7 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
         </div>
         <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No expenses</p>:
-            filtered.slice(0,50).map((e,idx)=><div key={e.UniqueID+'_'+idx} className="p-3 border-b flex items-center">{e.ReceiptPhoto&&<button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></button>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode}</p><p className="text-xs text-gray-400">{fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span></div>)}
+            filtered.slice(0,50).map((e,idx)=><div key={e.UniqueID+'_'+idx} onClick={()=>setSelectedExpense(e)} className="p-3 border-b flex items-center cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition">{e.ReceiptPhoto&&<div className="w-10 h-10 rounded-lg overflow-hidden mr-3 flex-shrink-0 bg-gray-200"><img src={e.ReceiptPhoto} alt="" className="w-full h-full object-cover"/></div>}<div className="flex-1 min-w-0"><p className="font-medium text-sm">{e.Description}</p><p className="text-xs text-gray-500">{e.Category} • {e.BranchCode}</p><p className="text-xs text-gray-400">{fmtDate(e.Date)}</p></div><span className="font-bold text-amber-600">{fmt(e.Amount)}</span><span className="ml-2 text-gray-400">›</span></div>)}
         </div>
       </div>
     </div>
