@@ -63,6 +63,30 @@ async function api(url,action,params={}){
   return d;
 }
 
+// POST version for large data (images)
+async function apiPost(url,action,params={}){
+  if(!url)throw new Error('API URL not set');
+  const u=new URL(url);
+  u.searchParams.set('action',action);
+  // Send large params in body, small params in URL
+  const bodyParams={};
+  Object.entries(params).forEach(([k,v])=>{
+    if(v&&typeof v==='string'&&v.length>1000){
+      bodyParams[k]=v;
+    }else if(v!=null){
+      u.searchParams.set(k,typeof v==='object'?JSON.stringify(v):v);
+    }
+  });
+  const r=await fetch(u.toString(),{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:Object.entries(bodyParams).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&')
+  });
+  const d=await r.json();
+  if(d.error)throw new Error(d.error);
+  return d;
+}
+
 const fmt=n=>'₱'+(parseFloat(n)||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtDate=d=>{
   if(!d)return'-';
@@ -144,7 +168,7 @@ function App(){
       
       try{
         console.log('Calling scanInvoice API...');
-        const r=await api(apiUrl,'scanInvoice',{
+        const r=await apiPost(apiUrl,'scanInvoice',{
           image:base64,
           ingredients:JSON.stringify(ingredients)
         });

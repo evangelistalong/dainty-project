@@ -342,7 +342,9 @@ function AIAssistant({apiUrl,purchases,expenses,ingredients,dishes,showToast}){
       if(r.error){
         showToast(r.error,'error');
       }else{
-        setInsights(r.insights||[]);
+        // Handle both response formats (insights directly or nested in data)
+        const insightsData = r.insights || r.data?.insights || r.data || [];
+        setInsights(Array.isArray(insightsData) ? insightsData : []);
       }
     }catch(e){
       showToast(e.message,'error');
