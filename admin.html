@@ -1903,6 +1903,8 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
   const[editBranch,setEditBranch]=useState(null);
   const[newBranch,setNewBranch]=useState(null);
   const[saving,setSaving]=useState(false);
+  const[activeSessions,setActiveSessions]=useState([]);
+  const[loadingSessions,setLoadingSessions]=useState(false);
   
   // Icon picker state
   const[showIconPicker,setShowIconPicker]=useState(null); // {type:'ingredient'|'expense', category:string}
@@ -1991,11 +1993,14 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
   const exportFull=async()=>{try{const r=await api(apiUrl,'exportData',{dataType:'Full'});const blob=new Blob([JSON.stringify(r,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='dainty_backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();URL.revokeObjectURL(url);showToast('Downloaded!')}catch(e){showToast(e.message,'error')}};
 
   const loadBranches=async()=>{try{const r=await api(apiUrl,'getBranchesAdmin');setBranchList(r.branches||[])}catch(e){console.error(e)}};
+  const loadActiveSessions=async()=>{setLoadingSessions(true);try{const r=await api(apiUrl,'getAllActiveSessions');setActiveSessions(r.sessions||[])}catch(e){console.error(e)}finally{setLoadingSessions(false)}};
+  const forceLogout=async(sessionID,deviceName)=>{if(!confirm(`Force logout device "${deviceName}"?`))return;try{await api(apiUrl,'logoutSession',{sessionID});showToast('Device logged out');loadActiveSessions()}catch(e){showToast(e.message,'error')}};
+  const clearAllSessions=async(branchCode)=>{if(!confirm(`Logout ALL devices from ${branchCode}?`))return;try{await api(apiUrl,'clearBranchSessions',{branchCode});showToast('All sessions cleared');loadActiveSessions()}catch(e){showToast(e.message,'error')}};
   const saveBranch=async()=>{if(!editBranch)return;setSaving(true);try{await api(apiUrl,'updateBranch',{branchCode:editBranch.BranchCode,data:JSON.stringify({BranchName:editBranch.BranchName,Password:editBranch.Password,Active:editBranch.Active})});showToast('Saved!');setEditBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
   const addBranch=async()=>{if(!newBranch?.BranchCode||!newBranch?.BranchName||!newBranch?.Password){showToast('Fill all fields','error');return}setSaving(true);try{await api(apiUrl,'addBranch',{data:JSON.stringify(newBranch)});showToast('Added!');setNewBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
   const deleteBranch=async(code)=>{if(!confirm('Delete this branch?'))return;try{await api(apiUrl,'deleteBranch',{branchCode:code});showToast('Deleted!');loadBranches();loadAll()}catch(e){showToast(e.message,'error')}};
 
-  useEffect(()=>{loadArchLog();loadBranches()},[]);
+  useEffect(()=>{loadArchLog();loadBranches();loadActiveSessions()},[]);
 
   return(
     <div className="space-y-4 fade">
@@ -2056,6 +2061,45 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
               <button onClick={()=>deleteBranch(b.BranchCode)} className="text-red-500 p-2">🗑️</button>
             </div>
           )}
+      </div>
+
+      {/* Active Sessions */}
+      <div className="card p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-gray-700">📱 Active Sessions</h3>
+          <button onClick={loadActiveSessions} disabled={loadingSessions} className="btn btn-s btn-sm">{loadingSessions?'Loading...':'🔄 Refresh'}</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-3">Devices currently logged into branch apps. Changing a branch password will auto-logout all its sessions.</p>
+        
+        {activeSessions.length===0?<p className="text-gray-400 text-sm">No active sessions</p>:
+          <div className="space-y-2">
+            {/* Group by branch */}
+            {[...new Set(activeSessions.map(s=>s.BranchCode))].sort().map(branch=>{
+              const branchSessions=activeSessions.filter(s=>s.BranchCode===branch);
+              return(
+                <div key={branch} className="border rounded-xl p-3">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="font-medium text-gray-700">{branch}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{branchSessions.length} device{branchSessions.length>1?'s':''}</span>
+                      <button onClick={()=>clearAllSessions(branch)} className="text-xs text-red-500 hover:text-red-700">Logout All</button>
+                    </div>
+                  </div>
+                  {branchSessions.map(s=>
+                    <div key={s.SessionID} className="flex items-center justify-between py-2 border-t text-sm">
+                      <div>
+                        <span className="font-medium">{s.DeviceName}</span>
+                        <span className="text-gray-400 ml-2">({s.Browser})</span>
+                        <p className="text-xs text-gray-400">Last active: {new Date(s.LastActive).toLocaleString('en-PH')}</p>
+                      </div>
+                      <button onClick={()=>forceLogout(s.SessionID,s.DeviceName)} className="text-red-500 text-xs px-2 py-1 hover:bg-red-50 rounded">🚪 Logout</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        }
       </div>
 
       <div className="card p-4">

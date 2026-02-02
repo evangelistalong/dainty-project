@@ -117,13 +117,76 @@ function App(){
   const expenseTotal=expenseCart.reduce((s,c)=>s+(parseFloat(c.Amount)||0),0);
   const expenseCount=expenseCart.length;
 
+  // Device identification
+  const getDeviceID=()=>{
+    let id=localStorage.getItem('dainty_device_id');
+    if(!id){
+      id='DEV_'+Math.random().toString(36).substr(2,9)+'_'+Date.now().toString(36);
+      localStorage.setItem('dainty_device_id',id);
+    }
+    return id;
+  };
+  
+  const getDeviceInfo=()=>{
+    const ua=navigator.userAgent;
+    let browser='Unknown';
+    let device='Desktop';
+    
+    if(ua.includes('Chrome'))browser='Chrome';
+    else if(ua.includes('Firefox'))browser='Firefox';
+    else if(ua.includes('Safari'))browser='Safari';
+    else if(ua.includes('Edge'))browser='Edge';
+    
+    if(/Mobile|Android|iPhone|iPad/.test(ua))device='Mobile';
+    if(/iPad|Tablet/.test(ua))device='Tablet';
+    
+    const screenSize=window.screen.width+'x'+window.screen.height;
+    return{
+      browser:browser,
+      deviceName:device+' ('+screenSize+')',
+      deviceID:getDeviceID()
+    };
+  };
+
   const checkSavedAuth=useCallback(async()=>{
     const savedUrl=API_URL||localStorage.getItem('dainty_api');
     const savedAuth=localStorage.getItem('dainty_auth_'+BRANCH_CODE);
+    const savedSession=localStorage.getItem('dainty_session_'+BRANCH_CODE);
+    const deviceID=getDeviceID();
+    
     if(savedUrl&&savedAuth){
       try{
+        // First validate existing session if we have one
+        if(savedSession){
+          const sv=await api(savedUrl,'validateSession',{branchCode:BRANCH_CODE,sessionID:savedSession,deviceID:deviceID});
+          if(sv.valid){
+            setApiUrl(savedUrl);
+            setAuthenticated(true);
+            setReady(true);
+            return true;
+          }else{
+            // Session invalid - clear and show message
+            localStorage.removeItem('dainty_session_'+BRANCH_CODE);
+            localStorage.removeItem('dainty_auth_'+BRANCH_CODE);
+            if(sv.reason)setLoginError(sv.reason);
+            return false;
+          }
+        }
+        
+        // No session - try to login with saved password
         const r=await api(savedUrl,'verifyBranchPassword',{branchCode:BRANCH_CODE,password:savedAuth});
         if(r.success){
+          // Register new session
+          const devInfo=getDeviceInfo();
+          const sess=await api(savedUrl,'registerSession',{
+            branchCode:BRANCH_CODE,
+            deviceID:devInfo.deviceID,
+            deviceName:devInfo.deviceName,
+            browser:devInfo.browser,
+            passwordVersion:r.passwordVersion||1
+          });
+          if(sess.sessionID)localStorage.setItem('dainty_session_'+BRANCH_CODE,sess.sessionID);
+          
           setApiUrl(savedUrl);
           setAuthenticated(true);
           setReady(true);
@@ -135,6 +198,24 @@ function App(){
   },[]);
 
   useEffect(()=>{checkSavedAuth()},[checkSavedAuth]);
+  
+  // Periodic session validation (every 5 minutes)
+  useEffect(()=>{
+    if(!authenticated||!apiUrl)return;
+    const interval=setInterval(async()=>{
+      const savedSession=localStorage.getItem('dainty_session_'+BRANCH_CODE);
+      if(savedSession){
+        try{
+          const sv=await api(apiUrl,'validateSession',{branchCode:BRANCH_CODE,sessionID:savedSession,deviceID:getDeviceID()});
+          if(!sv.valid){
+            showToast(sv.reason||'Session expired','error');
+            logout();
+          }
+        }catch(e){console.error(e)}
+      }
+    },5*60*1000); // 5 minutes
+    return()=>clearInterval(interval);
+  },[authenticated,apiUrl]);
 
   const login=async()=>{
     if(!apiUrl){setLoginError('Enter database URL');return}
@@ -144,8 +225,20 @@ function App(){
     try{
       const r=await api(apiUrl,'verifyBranchPassword',{branchCode:BRANCH_CODE,password});
       if(r.success){
+        // Register session with device info
+        const devInfo=getDeviceInfo();
+        const sess=await api(apiUrl,'registerSession',{
+          branchCode:BRANCH_CODE,
+          deviceID:devInfo.deviceID,
+          deviceName:devInfo.deviceName,
+          browser:devInfo.browser,
+          passwordVersion:r.passwordVersion||1
+        });
+        
         localStorage.setItem('dainty_api',apiUrl);
         localStorage.setItem('dainty_auth_'+BRANCH_CODE,password);
+        if(sess.sessionID)localStorage.setItem('dainty_session_'+BRANCH_CODE,sess.sessionID);
+        
         setAuthenticated(true);
         setReady(true);
       }else{
@@ -156,7 +249,13 @@ function App(){
   };
 
   const logout=()=>{
+    // Clear session on server
+    const savedSession=localStorage.getItem('dainty_session_'+BRANCH_CODE);
+    if(savedSession&&apiUrl){
+      api(apiUrl,'logoutSession',{sessionID:savedSession}).catch(()=>{});
+    }
     localStorage.removeItem('dainty_auth_'+BRANCH_CODE);
+    localStorage.removeItem('dainty_session_'+BRANCH_CODE);
     setAuthenticated(false);
     setReady(false);
     setPassword('');
