@@ -238,8 +238,8 @@ function App(){
         {tab==='dashboard'&&<Dashboard purchases={purchases} expenses={expenses} dishes={dishes} rowCounts={rowCounts}/>}
         {tab==='purchases'&&<Purchases apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} purchases={purchases} showToast={showToast} loadTx={loadTx}/>}
         {tab==='expenses'&&<Expenses apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} expenses={expenses} showToast={showToast} loadTx={loadTx}/>}
-        {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} showToast={showToast} loadAll={loadAll}/>}
-        {tab==='dishes'&&<Dishes apiUrl={apiUrl} dishes={dishes} dishCats={dishCats} ingredients={ingredients} showToast={showToast} loadAll={loadAll}/>}
+        {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} purchases={purchases} dishes={dishes} showToast={showToast} loadAll={loadAll}/>}
+        {tab==='dishes'&&<Dishes apiUrl={apiUrl} dishes={dishes} dishCats={dishCats} ingredients={ingredients} purchases={purchases} showToast={showToast} loadAll={loadAll}/>}
         {tab==='costing'&&<Costing apiUrl={apiUrl} dishes={dishes} branches={branches} branch={branch} settings={settings} showToast={showToast}/>}
         {tab==='reports'&&<Reports apiUrl={apiUrl} branches={branches} branch={branch} purchases={purchases} expenses={expenses} dishes={dishes} showToast={showToast}/>}
         {tab==='settings'&&<Settings apiUrl={apiUrl} setApiUrl={setApiUrl} setReady={setReady} settings={settings} branches={branches} rowCounts={rowCounts} showToast={showToast} loadAll={loadAll}/>}
@@ -514,29 +514,201 @@ function Expenses({apiUrl,branch,branches,settings,expenses,showToast,loadTx}){
   );
 }
 
-function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
+function Ingredients({apiUrl,ingredients,ingCats,settings,purchases,dishes,showToast,loadAll}){
   const[show,setShow]=useState(false);
   const[edit,setEdit]=useState(null);
+  const[viewIng,setViewIng]=useState(null);
+  const[showTools,setShowTools]=useState(false);
+  const[toolTab,setToolTab]=useState('market');
+  const[inactiveDays,setInactiveDays]=useState(30);
   const[saving,setSaving]=useState(false);
   const[search,setSearch]=useState('');
-  const[form,setForm]=useState({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});
+  const[form,setForm]=useState({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg',MarketPrice:''});
 
   const add=async()=>{
     if(!form.Name){showToast('Enter name','error');return}
     setSaving(true);
-    try{await api(apiUrl,'addIngredient',{data:form});showToast('Added!');setForm({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});setShow(false);loadAll();}
+    try{await api(apiUrl,'addIngredient',{data:form});showToast('Added!');setForm({Name:'',Unit:'g',Category:'Other',YieldPercent:100,ContainerType:'',ContainerSize:'',ContainerUnit:'kg',MarketPrice:''});setShow(false);loadAll();}
     catch(e){showToast(e.message,'error')}finally{setSaving(false)}
   };
   const del=async sku=>{if(!confirm('Delete?'))return;try{await api(apiUrl,'deleteIngredient',{sku});showToast('Deleted');loadAll();}catch(e){showToast(e.message,'error')}};
-  const saveEdit=async()=>{if(!edit)return;setSaving(true);try{await api(apiUrl,'updateIngredient',{sku:edit.MasterSKU,data:JSON.stringify({Name:edit.Name,Unit:edit.Unit,Category:edit.Category,YieldPercent:edit.YieldPercent,ContainerType:edit.ContainerType,ContainerSize:edit.ContainerSize,ContainerUnit:edit.ContainerUnit})});showToast('Saved!');setEdit(null);loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
+  const saveEdit=async()=>{if(!edit)return;setSaving(true);try{await api(apiUrl,'updateIngredient',{sku:edit.MasterSKU,data:JSON.stringify({Name:edit.Name,Unit:edit.Unit,Category:edit.Category,YieldPercent:edit.YieldPercent,ContainerType:edit.ContainerType,ContainerSize:edit.ContainerSize,ContainerUnit:edit.ContainerUnit,MarketPrice:edit.MarketPrice})});showToast('Saved!');setEdit(null);loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
 
   const filtered=ingredients.filter(i=>i.Name?.toLowerCase().includes(search.toLowerCase()));
   const units=(settings.Units||'g,kg,ml,L,pcs').split(',');
   const containerTypes=['', ...(settings.ContainerTypes||'Sack,Bottle,Can,Box,Pack,Drum,Bag,Tray,Gallon,Piece').split(',').map(s=>s.trim())];
   const containerUnits=(settings.ContainerUnits||'kg,g,L,ml,pcs').split(',').map(s=>s.trim());
 
+  // Get price info for each ingredient from purchases
+  const getPriceInfo=(sku)=>{
+    const ingPurchases=(purchases||[]).filter(p=>String(p.MasterSKU)===String(sku)&&p.UnitPrice&&parseFloat(p.UnitPrice)>0);
+    if(ingPurchases.length===0)return null;
+    const prices=ingPurchases.map(p=>parseFloat(p.UnitPrice));
+    return{
+      avgPrice:prices.reduce((a,b)=>a+b,0)/prices.length,
+      minPrice:Math.min(...prices),
+      maxPrice:Math.max(...prices),
+      count:ingPurchases.length,
+      lastDate:ingPurchases.sort((a,b)=>new Date(b.PurchaseDate)-new Date(a.PurchaseDate))[0]?.PurchaseDate
+    };
+  };
+
+  // Ingredients without market price
+  const needMarketPrice=ingredients.filter(ing=>{
+    const hasPrice=getPriceInfo(ing.MasterSKU);
+    const hasMarket=parseFloat(ing.MarketPrice)>0;
+    return !hasPrice&&!hasMarket;
+  });
+
+  // Inactive analysis
+  const today=new Date();
+  const inactiveItems=ingredients.map(ing=>{
+    const priceInfo=getPriceInfo(ing.MasterSKU);
+    const lastPurchase=priceInfo?.lastDate?new Date(priceInfo.lastDate+'T00:00:00'):null;
+    const daysSince=lastPurchase?Math.floor((today-lastPurchase)/(1000*60*60*24)):999;
+    return{...ing,lastPurchase:priceInfo?.lastDate,daysSince,hasPrice:!!priceInfo};
+  }).filter(ing=>ing.daysSince>=inactiveDays||!ing.hasPrice).sort((a,b)=>b.daysSince-a.daysSince);
+
+  // Bulk market price entry
+  const[bulkIdx,setBulkIdx]=useState(0);
+  const[bulkPrice,setBulkPrice]=useState('');
+  const currentBulk=needMarketPrice[bulkIdx];
+  
+  const saveBulkPrice=async()=>{
+    if(!currentBulk||!bulkPrice)return;
+    setSaving(true);
+    try{
+      const result=await api(apiUrl,'updateIngredient',{sku:currentBulk.MasterSKU,data:JSON.stringify({MarketPrice:parseFloat(bulkPrice)})});
+      console.log('Save result:',result);
+      showToast(`Saved ${currentBulk.Name}!`);
+      setBulkPrice('');
+      setBulkIdx(0); // Reset to start
+      await loadAll(); // Refresh data to update needMarketPrice list
+    }catch(e){console.error(e);showToast(e.message,'error')}finally{setSaving(false)}
+  };
+  
+  const skipBulk=()=>{
+    setBulkPrice('');
+    if(bulkIdx<needMarketPrice.length-1){
+      setBulkIdx(bulkIdx+1);
+    }else{
+      setBulkIdx(0);
+      showToast('Reached end of list');
+    }
+  };
+
+  // Mark items inactive
+  const markInactive=async(items)=>{
+    if(items.length===0)return;
+    if(!confirm(`Mark ${items.length} items as inactive?`))return;
+    setSaving(true);
+    try{
+      for(const item of items){
+        await api(apiUrl,'updateIngredient',{sku:item.MasterSKU,data:JSON.stringify({Active:'No'})});
+      }
+      showToast(`Marked ${items.length} inactive!`);
+      loadAll();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
   return(
     <div className="space-y-4 fade">
+      {viewIng&&<IngredientDetail ing={viewIng} purchases={purchases} dishes={dishes} onClose={()=>setViewIng(null)} onEdit={()=>{setViewIng(null);setEdit({...viewIng})}}/>}
+      
+      {/* Tools Modal */}
+      {showTools&&<div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+        <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
+          <div className="p-4 border-b flex justify-between items-center bg-gradient-to-r from-purple-600 to-purple-700 text-white">
+            <h3 className="font-bold text-lg">🛠️ Ingredient Tools</h3>
+            <button onClick={()=>setShowTools(false)} className="text-2xl text-white/80">✕</button>
+          </div>
+          
+          <div className="flex border-b">
+            <button onClick={()=>setToolTab('market')} className={`flex-1 p-3 text-sm font-medium ${toolTab==='market'?'border-b-2 border-purple-600 text-purple-600':'text-gray-500'}`}>💰 Auto Market Prices</button>
+            <button onClick={()=>setToolTab('inactive')} className={`flex-1 p-3 text-sm font-medium ${toolTab==='inactive'?'border-b-2 border-purple-600 text-purple-600':'text-gray-500'}`}>💤 Inactive Items</button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4">
+            {toolTab==='market'&&<div className="space-y-4">
+              <div className="p-3 bg-amber-50 rounded-xl">
+                <p className="text-sm font-semibold text-amber-700">💰 Bulk Market Price Entry</p>
+                <p className="text-xs text-amber-600 mt-1">Quickly add market prices for ingredients without purchase data. Search Google for prices and enter them one by one.</p>
+              </div>
+              
+              <div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-sm text-gray-600"><span className="font-bold text-lg text-red-600">{needMarketPrice.length}</span> ingredients need market prices</p>
+              </div>
+              
+              {needMarketPrice.length===0?<div className="text-center py-8"><p className="text-green-600 font-semibold">✅ All ingredients have prices!</p></div>:
+              <div className="space-y-3">
+                <div className="p-4 border-2 border-amber-200 rounded-xl bg-amber-50">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <p className="font-bold text-lg">{currentBulk?.Name}</p>
+                      <p className="text-sm text-gray-500">{currentBulk?.Category} • Base unit: {currentBulk?.Unit}</p>
+                    </div>
+                    <span className="text-xs bg-gray-200 px-2 py-1 rounded-full">{bulkIdx+1}/{needMarketPrice.length}</span>
+                  </div>
+                  
+                  <button onClick={()=>window.open(`https://www.google.com/search?q=price+of+${encodeURIComponent(currentBulk?.Name||'')}+per+${currentBulk?.Unit||'kg'}+Philippines+wholesale`,'_blank')} className="btn btn-s w-full text-sm mb-3">🔍 Search Google for Price</button>
+                  
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <input type="number" value={bulkPrice} onChange={e=>setBulkPrice(e.target.value)} className="inp" placeholder={`₱ per ${currentBulk?.Unit||'g'}`} step="0.0001"/>
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={saveBulkPrice} disabled={saving||!bulkPrice} className="btn btn-p flex-1">{saving?'Saving...':'✅ Save & Next'}</button>
+                    <button onClick={skipBulk} className="btn btn-s flex-1">⏭️ Skip</button>
+                  </div>
+                </div>
+                
+                <p className="text-xs text-gray-400 text-center">Tip: Search Google, find the price per unit, then enter it above</p>
+              </div>}
+            </div>}
+            
+            {toolTab==='inactive'&&<div className="space-y-4">
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <p className="text-sm font-semibold text-blue-700">💤 Find Unused Ingredients</p>
+                <p className="text-xs text-blue-600 mt-1">Identify ingredients not purchased recently to keep your list clean.</p>
+              </div>
+              
+              <div>
+                <label className="lbl">Not purchased in last:</label>
+                <select value={inactiveDays} onChange={e=>setInactiveDays(parseInt(e.target.value))} className="inp">
+                  <option value="7">7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                  <option value="60">60 days</option>
+                  <option value="90">90 days</option>
+                  <option value="180">6 months</option>
+                  <option value="365">1 year</option>
+                </select>
+              </div>
+              
+              <div className="p-3 bg-gray-50 rounded-xl">
+                <p className="text-sm text-gray-600"><span className="font-bold text-lg text-amber-600">{inactiveItems.length}</span> inactive ingredients found</p>
+              </div>
+              
+              {inactiveItems.length>0&&<>
+                <div className="max-h-64 overflow-y-auto space-y-2">
+                  {inactiveItems.slice(0,20).map(item=><div key={item.MasterSKU} className="p-2 border rounded-lg flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-sm">{item.Name}</p>
+                      <p className="text-xs text-gray-500">{item.lastPurchase?`Last: ${item.lastPurchase} (${item.daysSince} days ago)`:'Never purchased'}</p>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full ${item.daysSince>90?'bg-red-100 text-red-700':item.daysSince>30?'bg-amber-100 text-amber-700':'bg-gray-100 text-gray-600'}`}>{item.daysSince>365?'1y+':item.daysSince+'d'}</span>
+                  </div>)}
+                  {inactiveItems.length>20&&<p className="text-xs text-gray-400 text-center">+{inactiveItems.length-20} more</p>}
+                </div>
+                <button onClick={()=>markInactive(inactiveItems)} disabled={saving} className="btn w-full bg-amber-500 text-white">{saving?'Marking...':'💤 Mark All as Inactive'}</button>
+              </>}
+            </div>}
+          </div>
+        </div>
+      </div>}
+      
       {edit&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setEdit(null)}>
         <div className="bg-white rounded-2xl p-4 max-w-md w-full fade max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
           <div className="flex justify-between items-center mb-4">
@@ -561,6 +733,17 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
               </div>
             </div>
             
+            <div className="p-3 bg-amber-50 rounded-xl">
+              <p className="text-sm font-semibold text-amber-700 mb-2">💰 Market Price (fallback)</p>
+              <p className="text-xs text-amber-600 mb-2">Used when no purchase data exists for costing</p>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input type="number" value={edit.MarketPrice||''} onChange={e=>setEdit({...edit,MarketPrice:e.target.value})} className="inp text-sm" placeholder={`₱ per ${edit.Unit||'g'}`} step="0.0001"/>
+                </div>
+                <button type="button" onClick={()=>window.open(`https://www.google.com/search?q=price+of+${encodeURIComponent(edit.Name)}+per+${edit.Unit||'kg'}+Philippines`,'_blank')} className="btn btn-s text-xs px-3">🔍 Search</button>
+              </div>
+            </div>
+            
             <button onClick={saveEdit} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'💾 Save Changes'}</button>
           </div>
           <p className="text-xs text-gray-400 text-center mt-3">SKU: {edit.MasterSKU}</p>
@@ -570,6 +753,7 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">🥬 Ingredients</h2>
         <div className="flex gap-2">
+          <button onClick={()=>setShowTools(true)} className="btn text-xs px-3 bg-purple-100 text-purple-700">🛠️ Tools</button>
           <button onClick={()=>downloadCSV(ingredients,'ingredients')} className="btn btn-s btn-sm">📥</button>
           <button onClick={()=>setShow(!show)} className="btn btn-p btn-sm">{show?'✕':'+ Add'}</button>
         </div>
@@ -592,6 +776,17 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
           </div>
         </div>
         
+        <div className="p-3 bg-amber-50 rounded-xl">
+          <p className="text-sm font-semibold text-amber-700 mb-2">💰 Market Price (optional)</p>
+          <p className="text-xs text-amber-600 mb-2">Fallback price when no purchase data exists</p>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <input type="number" value={form.MarketPrice||''} onChange={e=>setForm({...form,MarketPrice:e.target.value})} className="inp text-sm" placeholder={`₱ per ${form.Unit||'g'}`} step="0.0001"/>
+            </div>
+            <button type="button" onClick={()=>form.Name&&window.open(`https://www.google.com/search?q=price+of+${encodeURIComponent(form.Name)}+per+${form.Unit||'kg'}+Philippines`,'_blank')} className="btn btn-s text-xs px-3" disabled={!form.Name}>🔍 Search</button>
+          </div>
+        </div>
+        
         <button onClick={add} disabled={saving} className="btn btn-p w-full">{saving?'Saving...':'Add'}</button>
       </div>}
 
@@ -600,17 +795,189 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
         <div className="p-3 border-b bg-gray-50"><span className="font-semibold text-gray-700">{filtered.length} ingredients</span></div>
         <div className="max-h-96 overflow-y-auto">
           {filtered.length===0?<p className="p-8 text-center text-gray-400">None</p>:
-            filtered.map(ing=><div key={ing.MasterSKU} className="p-3 border-b flex items-center"><div className="flex-1"><p className="font-medium">{ing.Name}</p><p className="text-xs text-gray-500">SKU: {ing.MasterSKU} • {ing.Unit} • {ing.Category}{ing.ContainerType?<span className="text-blue-500"> • 📦 {ing.ContainerType} ({ing.ContainerSize}{ing.ContainerUnit})</span>:''}</p></div><button onClick={()=>setEdit({...ing})} className="text-blue-500 p-2">✏️</button><button onClick={()=>del(ing.MasterSKU)} className="text-red-500 p-2">🗑️</button></div>)}
+            filtered.map(ing=>{
+              const priceInfo=getPriceInfo(ing.MasterSKU);
+              const hasMarketPrice=parseFloat(ing.MarketPrice)>0;
+              return(
+                <div key={ing.MasterSKU} className="p-3 border-b flex items-center">
+                  <button onClick={()=>setViewIng(ing)} className="flex-1 text-left">
+                    <p className="font-medium">{ing.Name}</p>
+                    <p className="text-xs text-gray-500">
+                      SKU: {ing.MasterSKU} • {ing.Unit} • {ing.Category}
+                      {priceInfo?<span className="text-green-600"> • ₱{priceInfo.avgPrice.toFixed(4)}/{ing.Unit}</span>:
+                        hasMarketPrice?<span className="text-amber-600"> • ₱{parseFloat(ing.MarketPrice).toFixed(4)}/{ing.Unit} ⚠️</span>:
+                        <span className="text-red-400"> • No price</span>}
+                    </p>
+                  </button>
+                  <button onClick={()=>setEdit({...ing})} className="text-blue-500 p-2">✏️</button>
+                  <button onClick={()=>del(ing.MasterSKU)} className="text-red-500 p-2">🗑️</button>
+                </div>
+              );
+            })}
         </div>
       </div>
     </div>
   );
 }
 
-function Dishes({apiUrl,dishes,dishCats,ingredients,showToast,loadAll}){
+// Ingredient Detail View
+function IngredientDetail({ing,purchases,dishes,onClose,onEdit}){
+  // Get all purchases for this ingredient
+  const ingPurchases=(purchases||[]).filter(p=>String(p.MasterSKU)===String(ing.MasterSKU)).sort((a,b)=>new Date(b.PurchaseDate)-new Date(a.PurchaseDate));
+  
+  // Price stats
+  const validPurchases=ingPurchases.filter(p=>p.UnitPrice&&parseFloat(p.UnitPrice)>0);
+  const prices=validPurchases.map(p=>parseFloat(p.UnitPrice));
+  const avgPrice=prices.length>0?prices.reduce((a,b)=>a+b,0)/prices.length:0;
+  const minPrice=prices.length>0?Math.min(...prices):0;
+  const maxPrice=prices.length>0?Math.max(...prices):0;
+  const totalQty=ingPurchases.reduce((s,p)=>s+(parseFloat(p.Qty)||0),0);
+  const totalSpent=ingPurchases.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
+  
+  // Group by branch
+  const byBranch={};
+  validPurchases.forEach(p=>{
+    const bc=p.BranchCode||'?';
+    if(!byBranch[bc])byBranch[bc]={prices:[],count:0};
+    byBranch[bc].prices.push(parseFloat(p.UnitPrice));
+    byBranch[bc].count++;
+  });
+  
+  // Find dishes using this ingredient
+  const usedInDishes=(dishes||[]).filter(d=>d.recipeLines?.some(l=>String(l.MasterSKU)===String(ing.MasterSKU)));
+  
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+      <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
+        <div className="p-4 border-b flex justify-between items-center bg-gradient-to-r from-green-600 to-green-700 text-white">
+          <div>
+            <h3 className="font-bold text-lg">{ing.Name}</h3>
+            <p className="text-xs text-green-200">SKU: {ing.MasterSKU} • {ing.Category}</p>
+          </div>
+          <button onClick={onClose} className="text-2xl text-white/80 hover:text-white">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {/* Price Summary */}
+          <div className="p-4 bg-gray-50 border-b">
+            {avgPrice>0?<>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-gray-500">Avg Price</p>
+                  <p className="text-lg font-bold text-green-600">₱{avgPrice.toFixed(4)}</p>
+                  <p className="text-xs text-gray-400">per {ing.Unit}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Min</p>
+                  <p className="text-lg font-bold text-blue-600">₱{minPrice.toFixed(4)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Max</p>
+                  <p className="text-lg font-bold text-red-600">₱{maxPrice.toFixed(4)}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mt-3 text-center">
+                <div className="p-2 bg-white rounded-lg">
+                  <p className="text-xs text-gray-500">Total Purchased</p>
+                  <p className="font-bold text-gray-800">{totalQty.toLocaleString()} {ing.Unit}</p>
+                </div>
+                <div className="p-2 bg-white rounded-lg">
+                  <p className="text-xs text-gray-500">Total Spent</p>
+                  <p className="font-bold text-red-600">{fmt(totalSpent)}</p>
+                </div>
+              </div>
+            </>:ing.MarketPrice?<div className="text-center">
+              <p className="text-xs text-amber-600 mb-2">⚠️ No purchase data - using market price</p>
+              <p className="text-2xl font-bold text-amber-600">₱{parseFloat(ing.MarketPrice).toFixed(4)}</p>
+              <p className="text-xs text-gray-400">per {ing.Unit} (estimated)</p>
+            </div>:<div className="text-center py-4">
+              <p className="text-gray-400 mb-2">No price data available</p>
+              <button onClick={onEdit} className="text-blue-600 text-sm font-medium">+ Add Market Price</button>
+            </div>}
+          </div>
+
+          {/* Price by Branch */}
+          {Object.keys(byBranch).length>0&&<div className="p-4 border-b">
+            <h4 className="font-semibold text-gray-700 mb-3">📊 Price by Branch</h4>
+            <div className="space-y-2">
+              {Object.entries(byBranch).map(([bc,data])=>{
+                const branchAvg=data.prices.reduce((a,b)=>a+b,0)/data.prices.length;
+                return(
+                  <div key={bc} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                    <div>
+                      <p className="font-medium text-sm">{bc}</p>
+                      <p className="text-xs text-gray-500">{data.count} purchases</p>
+                    </div>
+                    <span className={`font-bold ${branchAvg<=avgPrice?'text-green-600':'text-red-600'}`}>₱{branchAvg.toFixed(4)}/{ing.Unit}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>}
+
+          {/* Container Info */}
+          {ing.ContainerType&&<div className="p-4 border-b">
+            <h4 className="font-semibold text-gray-700 mb-2">📦 Default Container</h4>
+            <div className="p-3 bg-blue-50 rounded-lg">
+              <p className="font-medium text-blue-800">{ing.ContainerType}</p>
+              <p className="text-sm text-blue-600">{ing.ContainerSize} {ing.ContainerUnit} per container</p>
+            </div>
+          </div>}
+
+          {/* Recent Purchases */}
+          <div className="p-4 border-b">
+            <h4 className="font-semibold text-gray-700 mb-3">🛒 Recent Purchases ({ingPurchases.length})</h4>
+            {ingPurchases.length===0?<p className="text-gray-400 text-sm">No purchases yet</p>:
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {ingPurchases.slice(0,10).map((p,i)=>(
+                  <div key={p.UniqueID||i} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg text-sm">
+                    <div>
+                      <p className="font-medium">{p.Qty} {p.Unit} • {p.BranchCode}</p>
+                      <p className="text-xs text-gray-500">{fmtDate(p.PurchaseDate)}{p.Supplier?` • ${p.Supplier}`:''}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-red-600">{fmt(p.Price)}</p>
+                      <p className="text-xs text-green-600">₱{parseFloat(p.UnitPrice||0).toFixed(4)}/{ing.Unit}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            }
+          </div>
+
+          {/* Market Price Fallback */}
+          {ing.MarketPrice&&<div className="p-4 border-b">
+            <h4 className="font-semibold text-gray-700 mb-2">💰 Market Price (Fallback)</h4>
+            <div className="p-3 bg-amber-50 rounded-lg">
+              <p className="font-bold text-amber-700">₱{parseFloat(ing.MarketPrice).toFixed(4)}/{ing.Unit}</p>
+              <p className="text-xs text-amber-600 mt-1">Used when no purchase data exists</p>
+            </div>
+          </div>}
+
+          {/* Details */}
+          <div className="p-4">
+            <h4 className="font-semibold text-gray-700 mb-2">ℹ️ Details</h4>
+            <div className="space-y-1 text-sm">
+              <p><span className="text-gray-500">Base Unit:</span> <span className="font-medium">{ing.Unit}</span></p>
+              <p><span className="text-gray-500">Yield:</span> <span className="font-medium">{ing.YieldPercent||100}%</span></p>
+              <p><span className="text-gray-500">Category:</span> <span className="font-medium">{ing.Category}</span></p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t bg-gray-50">
+          <button onClick={onEdit} className="btn btn-s w-full">✏️ Edit Ingredient</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Dishes({apiUrl,dishes,dishCats,ingredients,purchases,showToast,loadAll}){
   const[show,setShow]=useState(false);
   const[edit,setEdit]=useState(null);
   const[editProc,setEditProc]=useState(null);
+  const[viewDish,setViewDish]=useState(null);
   const[procTemplates,setProcTemplates]=useState([]);
   const[saving,setSaving]=useState(false);
   const[search,setSearch]=useState('');
@@ -635,6 +1002,7 @@ function Dishes({apiUrl,dishes,dishCats,ingredients,showToast,loadAll}){
     <div className="space-y-4 fade">
       {edit&&<RecipeEditor apiUrl={apiUrl} dish={edit} dishes={dishes} ingredients={ingredients} comboCats={comboCats} onClose={()=>setEdit(null)} showToast={showToast}/>}
       {editProc&&<ProcedureEditor apiUrl={apiUrl} dish={editProc} ingredients={ingredients} templates={procTemplates} onClose={()=>setEditProc(null)} showToast={showToast}/>}
+      {viewDish&&<DishDetail apiUrl={apiUrl} dish={viewDish} dishes={dishes} ingredients={ingredients} purchases={purchases} onClose={()=>setViewDish(null)} onEditRecipe={()=>{setViewDish(null);setEdit(viewDish)}} onEditSteps={()=>{setViewDish(null);setEditProc(viewDish)}} showToast={showToast}/>}
 
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">🍳 Dishes</h2>
@@ -667,10 +1035,185 @@ function Dishes({apiUrl,dishes,dishCats,ingredients,showToast,loadAll}){
               <span className="text-xs text-gray-500">({catDishes.length})</span>
               {comboCats.includes(cat)&&<span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">Combo</span>}
             </div>
-            {catDishes.map(dish=><div key={dish.MCODE} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium">{dish.Name}</p><p className="text-xs text-gray-500">{dish.MCODE}{dish.SellPrice?` • ${fmt(dish.SellPrice)}`:''}</p></div><button onClick={()=>setEdit(dish)} className="text-blue-600 px-2 text-xs font-medium">Recipe</button><button onClick={()=>setEditProc(dish)} className="text-purple-600 px-2 text-xs font-medium">Steps</button><button onClick={()=>del(dish.MCODE)} className="text-red-500 p-2">🗑️</button></div>)}
+            {catDishes.map(dish=><div key={dish.MCODE} className="p-3 border-b flex items-center">
+              <button onClick={()=>setViewDish(dish)} className="flex-1 min-w-0 text-left">
+                <p className="font-medium">{dish.Name}</p>
+                <p className="text-xs text-gray-500">{dish.MCODE}{dish.SellPrice?` • ${fmt(dish.SellPrice)}`:''}{dish.Cost?` • Cost: ${fmt(dish.Cost)}`:''}</p>
+              </button>
+              <button onClick={()=>setEdit(dish)} className="text-blue-600 px-2 text-xs font-medium">Recipe</button>
+              <button onClick={()=>setEditProc(dish)} className="text-purple-600 px-2 text-xs font-medium">Steps</button>
+              <button onClick={()=>del(dish.MCODE)} className="text-red-500 p-2">🗑️</button>
+            </div>)}
           </div>
         )}
         {Object.keys(grouped).length===0&&<p className="text-center text-gray-400 py-8">No dishes</p>}
+      </div>
+    </div>
+  );
+}
+
+// Dish Detail View with Costing
+function DishDetail({apiUrl,dish,dishes,ingredients,purchases,onClose,onEditRecipe,onEditSteps,showToast}){
+  const[lines,setLines]=useState([]);
+  const[procedures,setProcedures]=useState([]);
+  const[loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      try{
+        const[recipeRes,procRes]=await Promise.all([
+          api(apiUrl,'getRecipeLines',{mcode:dish.MCODE}),
+          api(apiUrl,'getProcedures',{mcode:dish.MCODE})
+        ]);
+        setLines(recipeRes.lines||[]);
+        setProcedures(procRes.procedures||[]);
+      }catch(e){showToast(e.message,'error')}
+      finally{setLoading(false)}
+    })();
+  },[dish.MCODE,apiUrl]);
+
+  // Build price map from purchases
+  const priceMap={};
+  (purchases||[]).forEach(p=>{
+    const sku=String(p.MasterSKU);
+    if(!sku||!p.UnitPrice||parseFloat(p.UnitPrice)<=0)return;
+    if(!priceMap[sku])priceMap[sku]={prices:[],name:p.ItemName};
+    priceMap[sku].prices.push(parseFloat(p.UnitPrice));
+  });
+  // Calculate avg for each SKU
+  Object.keys(priceMap).forEach(sku=>{
+    const prices=priceMap[sku].prices;
+    priceMap[sku].avgPrice=prices.reduce((a,b)=>a+b,0)/prices.length;
+  });
+
+  // Calculate costs locally - with MarketPrice fallback
+  const calcLineCost=(line)=>{
+    if(line.IngredientType==='dish'){
+      const subDish=dishes.find(d=>d.MCODE===line.ComponentMCODE);
+      return {cost:parseFloat(subDish?.Cost)||0,isMarket:false};
+    }
+    const sku=String(line.MasterSKU);
+    const purchasePrice=priceMap[sku]?.avgPrice||0;
+    const ing=ingredients.find(i=>String(i.MasterSKU)===sku);
+    const marketPrice=parseFloat(ing?.MarketPrice)||0;
+    const qty=parseFloat(line.Qty)||0;
+    
+    if(purchasePrice>0){
+      return {cost:qty*purchasePrice,isMarket:false,unitPrice:purchasePrice};
+    }else if(marketPrice>0){
+      return {cost:qty*marketPrice,isMarket:true,unitPrice:marketPrice};
+    }
+    return {cost:0,isMarket:false,unitPrice:0};
+  };
+
+  const lineResults=lines.map(l=>calcLineCost(l));
+  const lineCosts=lineResults.map(r=>r.cost);
+  const totalCost=lineCosts.reduce((s,c)=>s+c,0);
+  const hasMarketPrices=lineResults.some(r=>r.isMarket);
+  const sellPrice=parseFloat(dish.SellPrice)||0;
+  const profit=sellPrice-totalCost;
+  const margin=sellPrice>0?((profit/sellPrice)*100):0;
+
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
+      <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
+        <div className="p-4 border-b flex justify-between items-center bg-gradient-to-r from-red-600 to-red-700 text-white">
+          <div>
+            <h3 className="font-bold text-lg">{dish.Name}</h3>
+            <p className="text-xs text-red-200">{dish.MCODE} • {dish.Category}</p>
+          </div>
+          <button onClick={onClose} className="text-2xl text-white/80 hover:text-white">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loading?<p className="text-center py-8 text-gray-400">Loading...</p>:<>
+            
+            {/* Costing Summary */}
+            <div className="p-4 bg-gray-50 border-b">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-xs text-gray-500">Sell Price</p>
+                  <p className="text-lg font-bold text-gray-800">{sellPrice>0?fmt(sellPrice):'-'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Total Cost</p>
+                  <p className="text-lg font-bold text-red-600">{totalCost>0?fmt(totalCost):'-'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Profit</p>
+                  <p className={`text-lg font-bold ${profit>=0?'text-green-600':'text-red-600'}`}>
+                    {sellPrice>0&&totalCost>0?fmt(profit):'-'}
+                  </p>
+                </div>
+              </div>
+              {sellPrice>0&&totalCost>0&&<div className="mt-3">
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-gray-500">Margin</span>
+                  <span className={`font-medium ${margin>=30?'text-green-600':margin>=15?'text-amber-600':'text-red-600'}`}>{margin.toFixed(1)}%</span>
+                </div>
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className={`h-full ${margin>=30?'bg-green-500':margin>=15?'bg-amber-500':'bg-red-500'}`} style={{width:`${Math.min(Math.max(margin,0),100)}%`}}/>
+                </div>
+              </div>}
+            </div>
+
+            {/* Recipe Ingredients */}
+            <div className="p-4 border-b">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="font-semibold text-gray-700">🥬 Recipe ({lines.length})</h4>
+                <button onClick={onEditRecipe} className="text-blue-600 text-xs font-medium">Edit</button>
+              </div>
+              {hasMarketPrices&&<p className="text-xs text-amber-600 mb-2 p-2 bg-amber-50 rounded-lg">⚠️ Some costs use market price estimates (no purchase data)</p>}
+              {lines.length===0?<p className="text-gray-400 text-sm">No ingredients added</p>:
+                <div className="space-y-2">
+                  {lines.map((line,i)=>{
+                    const result=lineResults[i];
+                    const sku=String(line.MasterSKU);
+                    const ing=ingredients.find(x=>String(x.MasterSKU)===sku);
+                    return(
+                      <div key={line.RecipeLineID||i} className="flex items-center p-2 rounded-lg" style={{background:result.isMarket?'#fef3c7':line.IngredientType==='dish'?'#f3e8ff':'#f9fafb'}}>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{line.IngredientType==='dish'?'🍳':'🥬'} {line.IngredientName}{result.isMarket?' ⚠️':''}</p>
+                          <p className="text-xs text-gray-500">{line.Qty} {line.Unit}{result.unitPrice>0?` @ ₱${result.unitPrice.toFixed(4)}/${ing?.Unit||'g'}`:''}{result.isMarket?' (market)':''}</p>
+                        </div>
+                        <span className={`text-sm font-medium ${result.isMarket?'text-amber-600':'text-red-600'}`}>{result.cost>0?fmt(result.cost):'-'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              }
+            </div>
+
+            {/* Cooking Procedure */}
+            <div className="p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="font-semibold text-gray-700">📝 Procedure ({procedures.length})</h4>
+                <button onClick={onEditSteps} className="text-purple-600 text-xs font-medium">Edit</button>
+              </div>
+              {procedures.length===0?<p className="text-gray-400 text-sm">No steps added</p>:
+                <div className="space-y-2">
+                  {procedures.map((step,i)=>(
+                    <div key={step.ProcedureID||i} className="flex items-start gap-3 p-2 bg-gray-50 rounded-lg">
+                      <span className="w-6 h-6 rounded-full bg-purple-600 text-white text-xs flex items-center justify-center font-bold flex-shrink-0">{i+1}</span>
+                      <div>
+                        <p className="text-sm font-medium">{step.Action}</p>
+                        {step.IngredientName&&<p className="text-xs text-gray-500">• {step.IngredientName}{step.Qty?` (${step.Qty} ${step.Unit})`:''}</p>}
+                        {step.Duration&&<p className="text-xs text-gray-500">• {step.Duration}</p>}
+                        {step.Notes&&<p className="text-xs text-gray-400 italic">{step.Notes}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+          </>}
+        </div>
+
+        <div className="p-4 border-t bg-gray-50 flex gap-2">
+          <button onClick={onEditRecipe} className="btn btn-s flex-1">Edit Recipe</button>
+          <button onClick={onEditSteps} className="btn flex-1" style={{background:'#9333ea',color:'white'}}>Edit Steps</button>
+        </div>
       </div>
     </div>
   );
@@ -682,6 +1225,7 @@ function RecipeEditor({apiUrl,dish,dishes,ingredients,comboCats,onClose,showToas
   const[saving,setSaving]=useState(false);
   const[picker,setPicker]=useState(null);
   const[pSearch,setPSearch]=useState('');
+  const[pickerMode,setPickerMode]=useState('ingredient'); // Toggle state
 
   const isCombo=comboCats.includes(dish.Category);
   const compDishes=dishes.filter(d=>d.CanBeComponent==='Yes'&&d.MCODE!==dish.MCODE);
@@ -691,7 +1235,27 @@ function RecipeEditor({apiUrl,dish,dishes,ingredients,comboCats,onClose,showToas
   const addLine=t=>setLines([...lines,{IngredientType:t,IngredientName:'',MasterSKU:'',ComponentMCODE:'',Qty:'',Unit:t==='dish'?'dish':'g',YieldPercent:100,_t:Date.now()}]);
   const upLine=(i,f,v)=>{const n=[...lines];n[i]={...n[i],[f]:v};setLines(n)};
   const rmLine=i=>setLines(lines.filter((_,idx)=>idx!==i));
-  const select=item=>{if(picker.t==='ingredient'){upLine(picker.i,'IngredientName',item.Name);upLine(picker.i,'MasterSKU',item.MasterSKU);upLine(picker.i,'Unit',item.Unit||'g')}else{upLine(picker.i,'IngredientName',item.Name);upLine(picker.i,'ComponentMCODE',item.MCODE);upLine(picker.i,'Unit','dish')}setPicker(null);setPSearch('')};
+  
+  const openPicker=(i,defaultType)=>{
+    const type=defaultType||(isCombo?'dish':'ingredient');
+    setPicker({i});
+    setPickerMode(type);
+    setPSearch('');
+  };
+  
+  const select=item=>{
+    const i=picker.i;
+    const n=[...lines];
+    if(pickerMode==='ingredient'){
+      n[i]={...n[i],IngredientType:'ingredient',IngredientName:item.Name,MasterSKU:item.MasterSKU,ComponentMCODE:'',Unit:item.Unit||'g'};
+    }else{
+      n[i]={...n[i],IngredientType:'dish',IngredientName:item.Name,MasterSKU:'',ComponentMCODE:item.MCODE,Unit:'dish'};
+    }
+    setLines(n);
+    setPicker(null);
+    setPSearch('');
+  };
+  
   const save=async()=>{const valid=lines.filter(l=>l.IngredientName&&l.Qty);setSaving(true);try{await api(apiUrl,'saveRecipeLines',{mcode:dish.MCODE,lines:valid});showToast('Saved!');onClose()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
 
   const filtIng=ingredients.filter(i=>i.Name?.toLowerCase().includes(pSearch.toLowerCase()));
@@ -701,18 +1265,23 @@ function RecipeEditor({apiUrl,dish,dishes,ingredients,comboCats,onClose,showToas
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center">
       <div className="bg-white w-full max-w-lg max-h-[90vh] rounded-t-2xl sm:rounded-2xl overflow-hidden flex flex-col fade">
         <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-          <div><h3 className="font-bold text-lg">{dish.Name}</h3><p className="text-xs text-gray-500">{dish.MCODE} • {dish.Category}</p></div>
+          <div><h3 className="font-bold text-lg">{dish.Name}</h3><p className="text-xs text-gray-500">{dish.MCODE} • {dish.Category}{isCombo?' • Combo':''}</p></div>
           <button onClick={onClose} className="text-2xl text-gray-400">✕</button>
         </div>
 
         {picker&&<div className="absolute inset-0 bg-white z-10 flex flex-col">
           <div className="p-4 border-b">
-            <div className="flex justify-between items-center mb-3"><h4 className="font-semibold">Select {picker.t==='ingredient'?'Ingredient':'Dish'}</h4><button onClick={()=>setPicker(null)} className="text-xl">✕</button></div>
-            <input value={pSearch} onChange={e=>setPSearch(e.target.value)} placeholder="🔍 Search..." className="inp" autoFocus/>
+            <div className="flex justify-between items-center mb-3"><h4 className="font-semibold">Select {pickerMode==='ingredient'?'Ingredient':'Dish'}</h4><button onClick={()=>setPicker(null)} className="text-xl">✕</button></div>
+            <input value={pSearch} onChange={e=>setPSearch(e.target.value)} placeholder="🔍 Search..." className="inp mb-2" autoFocus/>
+            <div className="flex gap-2">
+              <button onClick={()=>setPickerMode('ingredient')} className={`flex-1 text-sm py-2 rounded-lg font-medium ${pickerMode==='ingredient'?'bg-green-600 text-white':'bg-gray-100 text-gray-600'}`}>🥬 Ingredients</button>
+              <button onClick={()=>setPickerMode('dish')} className={`flex-1 text-sm py-2 rounded-lg font-medium ${pickerMode==='dish'?'bg-purple-600 text-white':'bg-gray-100 text-gray-600'}`} disabled={compDishes.length===0}>🍳 Dishes ({compDishes.length})</button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto">
-            {picker.t==='ingredient'?filtIng.slice(0,50).map(i=><button key={i.MasterSKU} onClick={()=>select(i)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{i.Name}</span><span className="text-xs text-gray-500 ml-2">[{i.MasterSKU}] {i.Unit}</span></button>)
-              :filtDish.slice(0,50).map(d=><button key={d.MCODE} onClick={()=>select(d)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{d.Name}</span><span className="text-xs text-gray-500 ml-2">[{d.MCODE}]</span></button>)}
+            {pickerMode==='ingredient'?
+              (filtIng.length===0?<p className="p-6 text-center text-gray-400">No ingredients found</p>:filtIng.slice(0,50).map(i=><button key={i.MasterSKU} onClick={()=>select(i)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{i.Name}</span><span className="text-xs text-gray-500 ml-2">[{i.MasterSKU}] {i.Unit}</span></button>))
+              :(filtDish.length===0?<p className="p-6 text-center text-gray-400">No component dishes available</p>:filtDish.slice(0,50).map(d=><button key={d.MCODE} onClick={()=>select(d)} className="w-full p-3 border-b text-left hover:bg-gray-50"><span className="font-medium">{d.Name}</span><span className="text-xs text-gray-500 ml-2">[{d.MCODE}] {d.Category}</span></button>))}
           </div>
         </div>}
 
@@ -720,13 +1289,13 @@ function RecipeEditor({apiUrl,dish,dishes,ingredients,comboCats,onClose,showToas
           {loading?<p className="text-center py-8 text-gray-400">Loading...</p>:<>
             <div className="flex gap-2 mb-4">
               <button onClick={()=>addLine('ingredient')} className="btn btn-s flex-1 text-sm">+ Ingredient</button>
-              {isCombo&&<button onClick={()=>addLine('dish')} className="flex-1 text-sm px-4 py-2 bg-purple-100 text-purple-700 rounded-lg font-medium">+ Dish</button>}
+              <button onClick={()=>addLine('dish')} className={`flex-1 text-sm px-4 py-2 rounded-lg font-medium ${compDishes.length>0?'bg-purple-100 text-purple-700':'bg-gray-100 text-gray-400'}`} disabled={compDishes.length===0}>+ Dish</button>
             </div>
-            {lines.length===0?<p className="text-center py-8 text-gray-400">No ingredients</p>:
+            {lines.length===0?<p className="text-center py-8 text-gray-400">No ingredients. Add one above.</p>:
               <div className="space-y-3">{lines.map((line,i)=>
                 <div key={line.RecipeLineID||line._t} className="p-3 rounded-xl border" style={{background:line.IngredientType==='dish'?'#f3e8ff':'#f9fafb'}}>
                   <div className="flex justify-between items-center mb-2"><span className="text-xs font-medium text-gray-500">{line.IngredientType==='dish'?'🍳 Dish':'🥬 Ingredient'}</span><button onClick={()=>rmLine(i)} className="text-red-500 text-sm">✕</button></div>
-                  <button onClick={()=>setPicker({i,t:line.IngredientType==='dish'?'dish':'ingredient'})} className="w-full p-2 rounded-lg border bg-white text-left mb-2 text-sm">{line.IngredientName||<span className="text-gray-400">Tap to select...</span>}</button>
+                  <button onClick={()=>openPicker(i,line.IngredientType)} className="w-full p-2 rounded-lg border bg-white text-left mb-2 text-sm">{line.IngredientName||<span className="text-gray-400">Tap to select...</span>}</button>
                   <div className="grid grid-cols-3 gap-2">
                     <div><label className="text-xs text-gray-500">Qty</label><input type="number" value={line.Qty} onChange={e=>upLine(i,'Qty',e.target.value)} className="inp text-sm p-2" step="0.01"/></div>
                     <div><label className="text-xs text-gray-500">Unit</label><input value={line.Unit} onChange={e=>upLine(i,'Unit',e.target.value)} className="inp text-sm p-2" disabled={line.IngredientType==='dish'}/></div>
@@ -785,9 +1354,9 @@ function ProcedureEditor({apiUrl,dish,ingredients,templates,onClose,showToast}){
     setSteps(n);
   };
   const selectIng=(i,ing)=>{
-    upStep(i,'IngredientName',ing.Name);
-    upStep(i,'MasterSKU',ing.MasterSKU);
-    upStep(i,'Unit',ing.Unit);
+    const n=[...steps];
+    n[i]={...n[i],IngredientName:ing.Name,MasterSKU:ing.MasterSKU,Unit:ing.Unit};
+    setSteps(n);
   };
 
   const save=async()=>{
@@ -928,21 +1497,22 @@ function Costing({apiUrl,dishes,branches,branch,settings,showToast}){
       <h2 className="text-lg font-bold text-gray-800">💵 Costing</h2>
 
       <div className="card p-4">
-        <h3 className="font-semibold text-gray-700 mb-3">Parameters</h3>
+        <h3 className="font-semibold text-gray-700 mb-3">⚙️ Costing Parameters</h3>
         <div className="grid grid-cols-2 gap-3">
-          <div><label className="lbl">Lookback Days</label><select value={days} onChange={e=>setDays(parseInt(e.target.value))} className="inp"><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
-          <div><label className="lbl">Method</label><select value={method} onChange={e=>setMethod(e.target.value)} className="inp"><option>Highest</option><option>Average</option><option>Latest</option></select></div>
+          <div><label className="lbl">Purchase History (Lookback)</label><select value={days} onChange={e=>setDays(parseInt(e.target.value))} className="inp"><option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="60">Last 60 days</option><option value="90">Last 90 days</option></select></div>
+          <div><label className="lbl">Price Calculation Method</label><select value={method} onChange={e=>setMethod(e.target.value)} className="inp"><option value="Highest">Highest Price</option><option value="Average">Average Price</option><option value="Latest">Most Recent Price</option></select></div>
         </div>
       </div>
 
       <div className="flex gap-2">
-        <button onClick={()=>setSub('dishes')} className={`btn flex-1 text-sm ${sub==='dishes'?'btn-p':'btn-s'}`}>🍳 Dish Costing</button>
-        <button onClick={()=>setSub('ingredients')} className={`btn flex-1 text-sm ${sub==='ingredients'?'btn-p':'btn-s'}`}>📊 Prices by Branch</button>
+        <button onClick={()=>setSub('dishes')} className={`btn flex-1 text-sm ${sub==='dishes'?'btn-p':'btn-s'}`}>🍳 Calculate Dish Costs</button>
+        <button onClick={()=>setSub('ingredients')} className={`btn flex-1 text-sm ${sub==='ingredients'?'btn-p':'btn-s'}`}>📊 Ingredient Prices by Branch</button>
       </div>
 
       {sub==='dishes'&&<>
         <div className="card p-4 space-y-3">
-          <h3 className="font-semibold text-gray-700">🍳 Quick Cost - Single Dish</h3>
+          <h3 className="font-semibold text-gray-700">⚡ Quick Cost - Single Dish</h3>
+          <p className="text-xs text-gray-500">Calculate cost for one dish based on its recipe ingredients</p>
           <select value={selDish} onChange={e=>setSelDish(e.target.value)} className="inp">
             <option value="">-- Select a dish --</option>
             {dishes.map(d=><option key={d.MCODE} value={d.MCODE}>{d.Name} ({d.MCODE})</option>)}
@@ -951,9 +1521,9 @@ function Costing({apiUrl,dishes,branches,branch,settings,showToast}){
         </div>
 
         <div className="card p-4">
-          <h3 className="font-semibold text-gray-700 mb-3">📊 Full Report - All Dishes</h3>
-          <p className="text-xs text-gray-500 mb-3">Calculates all {dishes.length} dishes. Takes 1-2 minutes.</p>
-          <button onClick={calcAll} disabled={loading} className="btn btn-s w-full">{loading?'Calculating...':'🔄 Calculate All Dishes'}</button>
+          <h3 className="font-semibold text-gray-700 mb-2">📊 Batch Calculate - All Dishes</h3>
+          <p className="text-xs text-gray-500 mb-3">Calculates costs for all {dishes.length} dishes and updates the database. Takes 1-2 minutes.</p>
+          <button onClick={calcAll} disabled={loading} className="btn btn-s w-full">{loading?'Calculating...':'🔄 Calculate All Dishes & Save'}</button>
         </div>
         {costs.length>0&&<>
           <div className="flex gap-2 overflow-x-auto pb-2">
@@ -978,15 +1548,18 @@ function Costing({apiUrl,dishes,branches,branch,settings,showToast}){
             </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Unit Price</span><span className="font-bold text-green-700">{priceDetail.price}</span></div>
-              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Last Purchase</span><span className="font-medium">{priceDetail.lastDate}</span></div>
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Last Purchase Date</span><span className="font-medium">{priceDetail.lastDate}</span></div>
               <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Supplier</span><span className="font-medium">{priceDetail.supplier}</span></div>
-              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Purchase Count</span><span className="font-medium">{priceDetail.count}</span></div>
+              <div className="flex justify-between p-2 bg-gray-50 rounded-lg"><span className="text-gray-600">Total Purchases</span><span className="font-medium">{priceDetail.count}</span></div>
             </div>
           </div>
         </div>}
+        <div className="card p-4 mb-3">
+          <p className="text-xs text-gray-500">Compare ingredient prices across all branches. Green = lowest price, Red = highest price. Tap any price for purchase details.</p>
+        </div>
         <div className="flex gap-2">
-          <button onClick={loadPrices} disabled={loading} className="btn btn-p flex-1">{loading?'Loading...':'🔄 Load Prices'}</button>
-          {prices.length>0&&<button onClick={exportPrices} className="btn btn-s">📥 CSV</button>}
+          <button onClick={loadPrices} disabled={loading} className="btn btn-p flex-1">{loading?'Loading...':'🔄 Load Ingredient Prices'}</button>
+          {prices.length>0&&<button onClick={exportPrices} className="btn btn-s">📥 Export CSV</button>}
         </div>
         {prices.length>0&&<div className="card tbl-wrap">
           <table className="w-full text-sm">
@@ -1012,6 +1585,8 @@ function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
   const[allExpenses,setAllExpenses]=useState([]);
   const[allCosts,setAllCosts]=useState([]);
   const[loading,setLoading]=useState(false);
+  const[viewPhoto,setViewPhoto]=useState(null);
+  const[invoiceType,setInvoiceType]=useState('purchases'); // 'purchases' or 'expenses'
 
   const loadData=async()=>{
     setLoading(true);
@@ -1061,9 +1636,26 @@ function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
   const branchE=groupBy(allExpenses,e=>e.BranchCode||e.Branch);
   const branchData=branches.map(b=>({code:b.BranchCode,name:b.BranchName,purchases:sumBy(branchP[b.BranchCode]||branchP[b.BranchName]||[],x=>parseFloat(x.Price)),expenses:sumBy(branchE[b.BranchCode]||branchE[b.BranchName]||[],x=>parseFloat(x.Amount))}));
 
-  // Top Ingredients
+  // Top Ingredients - Enhanced
   const ingTotals={};
-  allPurchases.forEach(p=>{const k=p.ItemName;if(!ingTotals[k])ingTotals[k]={name:k,qty:0,cost:0,count:0,unit:p.Unit};ingTotals[k].qty+=parseFloat(p.Qty)||0;ingTotals[k].cost+=parseFloat(p.Price)||0;ingTotals[k].count++});
+  const totalPurchaseCost=sumBy(allPurchases,p=>parseFloat(p.Price)||0);
+  allPurchases.forEach(p=>{
+    const k=p.ItemName;
+    if(!ingTotals[k])ingTotals[k]={name:k,qty:0,cost:0,count:0,unit:p.BaseUnit||p.Unit,unitPrices:[],category:p.Category};
+    ingTotals[k].qty+=parseFloat(p.Qty)||0;
+    ingTotals[k].cost+=parseFloat(p.Price)||0;
+    ingTotals[k].count++;
+    if(parseFloat(p.UnitPrice)>0)ingTotals[k].unitPrices.push(parseFloat(p.UnitPrice));
+  });
+  // Calculate averages and conversions
+  Object.values(ingTotals).forEach(ing=>{
+    ing.avgPrice=ing.unitPrices.length>0?ing.unitPrices.reduce((a,b)=>a+b,0)/ing.unitPrices.length:0;
+    ing.pct=totalPurchaseCost>0?(ing.cost/totalPurchaseCost*100):0;
+    // Convert to kg/L for display
+    if(ing.unit==='g'){ing.qtyKg=ing.qty/1000;ing.displayUnit='kg'}
+    else if(ing.unit==='ml'){ing.qtyKg=ing.qty/1000;ing.displayUnit='L'}
+    else{ing.qtyKg=ing.qty;ing.displayUnit=ing.unit}
+  });
   const topIngByCost=Object.values(ingTotals).sort((a,b)=>b.cost-a.cost).slice(0,15);
   const topIngByQty=Object.values(ingTotals).sort((a,b)=>b.qty-a.qty).slice(0,15);
 
@@ -1104,7 +1696,7 @@ function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2">
-        {[{id:'daily',l:'📅 Daily'},{id:'weekly',l:'📆 Weekly'},{id:'branch',l:'🏢 Branch'},{id:'topIng',l:'🥩 Top Items'},{id:'priceAlert',l:'🔴 Price Alerts'},{id:'expCat',l:'📂 Exp Category'},{id:'expPay',l:'💳 Exp Payment'},{id:'profit',l:'💰 Profitability'}].map(t=>
+        {[{id:'daily',l:'📅 Daily'},{id:'weekly',l:'📆 Weekly'},{id:'branch',l:'🏢 Branch'},{id:'topIng',l:'🥩 Top Items'},{id:'priceAlert',l:'🔴 Price Alerts'},{id:'invoices',l:'🧾 Invoices'},{id:'expCat',l:'📂 Exp Category'},{id:'expPay',l:'💳 Exp Payment'},{id:'profit',l:'💰 Profitability'}].map(t=>
           <button key={t.id} onClick={()=>{setSub(t.id);if(t.id==='profit'&&allCosts.length===0)loadCosts()}} className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${sub===t.id?'bg-red-600 text-white':'bg-gray-200'}`}>{t.l}</button>
         )}
       </div>
@@ -1149,15 +1741,31 @@ function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
         <div className="card">
           <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🥩 Top Items by Cost</div>
           <div className="tbl-wrap"><table className="w-full text-sm">
-            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Cost</th><th className="p-2 text-right">Purchases</th></tr></thead>
-            <tbody>{topIngByCost.map((ing,i)=><tr key={ing.name} className="border-b"><td className="p-2 text-gray-400">{i+1}</td><td className="p-2 font-medium">{ing.name}</td><td className="p-2 text-right text-red-600 font-bold">{fmt(ing.cost)}</td><td className="p-2 text-right text-gray-500">{ing.count}x</td></tr>)}</tbody>
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Cost</th><th className="p-2 text-right">% of Total</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Avg Price</th><th className="p-2 text-right">Purchases</th></tr></thead>
+            <tbody>{topIngByCost.map((ing,i)=><tr key={ing.name} className="border-b hover:bg-gray-50">
+              <td className="p-2 text-gray-400">{i+1}</td>
+              <td className="p-2"><p className="font-medium">{ing.name}</p><p className="text-xs text-gray-400">{ing.category}</p></td>
+              <td className="p-2 text-right text-red-600 font-bold">{fmt(ing.cost)}</td>
+              <td className="p-2 text-right"><span className="px-2 py-0.5 rounded-full text-xs bg-red-100 text-red-700">{ing.pct.toFixed(1)}%</span></td>
+              <td className="p-2 text-right"><span className="font-medium">{ing.qtyKg.toFixed(2)}</span> <span className="text-gray-400">{ing.displayUnit}</span></td>
+              <td className="p-2 text-right text-green-600">{ing.avgPrice>0?`₱${ing.avgPrice.toFixed(4)}/${ing.unit}`:'-'}</td>
+              <td className="p-2 text-right text-gray-500">{ing.count}x</td>
+            </tr>)}</tbody>
+            <tfoot><tr className="bg-gray-100 font-bold"><td className="p-2"></td><td className="p-2">TOTAL</td><td className="p-2 text-right text-red-700">{fmt(totalPurchaseCost)}</td><td className="p-2 text-right">100%</td><td colSpan="3"></td></tr></tfoot>
           </table></div>
         </div>
         <div className="card">
           <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">📦 Top Items by Quantity</div>
           <div className="tbl-wrap"><table className="w-full text-sm">
-            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Qty</th><th className="p-2 text-right">Unit</th></tr></thead>
-            <tbody>{topIngByQty.map((ing,i)=><tr key={ing.name} className="border-b"><td className="p-2 text-gray-400">{i+1}</td><td className="p-2 font-medium">{ing.name}</td><td className="p-2 text-right font-bold">{ing.qty.toLocaleString()}</td><td className="p-2 text-right text-gray-500">{ing.unit}</td></tr>)}</tbody>
+            <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">#</th><th className="p-2 text-left">Item</th><th className="p-2 text-right">Total Qty</th><th className="p-2 text-right">Raw (g/ml)</th><th className="p-2 text-right">Total Cost</th><th className="p-2 text-right">Purchases</th></tr></thead>
+            <tbody>{topIngByQty.map((ing,i)=><tr key={ing.name} className="border-b hover:bg-gray-50">
+              <td className="p-2 text-gray-400">{i+1}</td>
+              <td className="p-2"><p className="font-medium">{ing.name}</p><p className="text-xs text-gray-400">{ing.category}</p></td>
+              <td className="p-2 text-right"><span className="font-bold text-lg">{ing.qtyKg.toFixed(2)}</span> <span className="text-gray-500">{ing.displayUnit}</span></td>
+              <td className="p-2 text-right text-gray-400">{ing.qty.toLocaleString()} {ing.unit}</td>
+              <td className="p-2 text-right text-red-600 font-medium">{fmt(ing.cost)}</td>
+              <td className="p-2 text-right text-gray-500">{ing.count}x</td>
+            </tr>)}</tbody>
           </table></div>
         </div>
       </div>}
@@ -1169,6 +1777,80 @@ function Reports({apiUrl,branches,branch,purchases,expenses,dishes,showToast}){
           <thead><tr className="border-b bg-gray-50"><th className="p-2 text-left">Item</th><th className="p-2 text-right">First Price</th><th className="p-2 text-right">Latest Price</th><th className="p-2 text-right">Change</th></tr></thead>
           <tbody>{priceAlerts.map(t=><tr key={t.name} className="border-b"><td className="p-2 font-medium">{t.name}<span className="text-xs text-gray-400 ml-1">/{t.unit}</span></td><td className="p-2 text-right text-gray-500">{t.first?.toFixed(2)}</td><td className="p-2 text-right font-medium">{t.last?.toFixed(2)}</td><td className="p-2 text-right"><span className="px-2 py-1 rounded-full text-xs font-bold bg-red-100 text-red-700">+{t.change}%</span></td></tr>)}</tbody>
         </table></div>}
+      </div>}
+
+      {/* Photo Viewer Modal */}
+      {viewPhoto&&<div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4" onClick={()=>setViewPhoto(null)}>
+        <div className="max-w-2xl w-full">
+          <img src={viewPhoto} alt="Invoice/Receipt" className="w-full rounded-lg"/>
+          <p className="text-center text-white mt-3 text-sm">Tap anywhere to close</p>
+        </div>
+      </div>}
+
+      {!loading&&sub==='invoices'&&<div className="space-y-4">
+        <div className="flex gap-2">
+          <button onClick={()=>setInvoiceType('purchases')} className={`flex-1 p-3 rounded-xl font-medium ${invoiceType==='purchases'?'bg-red-600 text-white':'bg-gray-200'}`}>🧾 Purchase Invoices</button>
+          <button onClick={()=>setInvoiceType('expenses')} className={`flex-1 p-3 rounded-xl font-medium ${invoiceType==='expenses'?'bg-amber-500 text-white':'bg-gray-200'}`}>🧾 Expense Receipts</button>
+        </div>
+        
+        {invoiceType==='purchases'&&<div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🧾 Purchase Invoices with Photos</div>
+          {(()=>{
+            const withPhotos=allPurchases.filter(p=>p.InvoicePhoto);
+            const grouped={};
+            withPhotos.forEach(p=>{
+              const key=p.PurchaseDate+'|'+p.Supplier+'|'+p.PO;
+              if(!grouped[key])grouped[key]={date:p.PurchaseDate,supplier:p.Supplier,po:p.PO,photo:p.InvoicePhoto,items:[],total:0};
+              grouped[key].items.push(p);
+              grouped[key].total+=parseFloat(p.Price)||0;
+            });
+            const invoices=Object.values(grouped).sort((a,b)=>new Date(b.date)-new Date(a.date));
+            return invoices.length===0?<p className="p-8 text-center text-gray-400">No invoices with photos in this period</p>:
+            <div className="divide-y">
+              {invoices.map((inv,i)=><div key={i} className="p-3">
+                <div className="flex gap-3">
+                  {inv.photo&&<button onClick={()=>setViewPhoto(inv.photo)} className="w-20 h-20 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0 hover:opacity-80">
+                    <img src={inv.photo} alt="Invoice" className="w-full h-full object-cover"/>
+                  </button>}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-800">{inv.supplier||'(No Supplier)'}</p>
+                    <p className="text-xs text-gray-500">{fmtDate(inv.date)} {inv.po&&<span>• PO: {inv.po}</span>}</p>
+                    <p className="text-sm text-gray-600 mt-1">{inv.items.length} items</p>
+                    <p className="font-bold text-red-600 text-lg">{fmt(inv.total)}</p>
+                  </div>
+                </div>
+                <div className="mt-2 pl-2 border-l-2 border-gray-200 space-y-1">
+                  {inv.items.slice(0,5).map((p,j)=><div key={j} className="flex justify-between text-sm">
+                    <span className="text-gray-600">{p.ItemName} <span className="text-gray-400">({p.Qty} {p.ContainerType})</span></span>
+                    <span className="text-red-600">{fmt(p.Price)}</span>
+                  </div>)}
+                  {inv.items.length>5&&<p className="text-xs text-gray-400">+{inv.items.length-5} more items</p>}
+                </div>
+              </div>)}
+            </div>
+          })()}
+        </div>}
+        
+        {invoiceType==='expenses'&&<div className="card">
+          <div className="p-3 border-b bg-gray-50 font-semibold text-gray-700">🧾 Expense Receipts with Photos</div>
+          {(()=>{
+            const withPhotos=allExpenses.filter(e=>e.ReceiptPhoto);
+            return withPhotos.length===0?<p className="p-8 text-center text-gray-400">No receipts with photos in this period</p>:
+            <div className="divide-y">
+              {withPhotos.sort((a,b)=>new Date(b.Date)-new Date(a.Date)).map((e,i)=><div key={i} className="p-3 flex gap-3">
+                <button onClick={()=>setViewPhoto(e.ReceiptPhoto)} className="w-16 h-16 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0 hover:opacity-80">
+                  <img src={e.ReceiptPhoto} alt="Receipt" className="w-full h-full object-cover"/>
+                </button>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium">{e.Description||e.Category}</p>
+                  <p className="text-xs text-gray-500">{fmtDate(e.Date)} • {e.Category} • {e.BranchCode}</p>
+                  {e.Vendor&&<p className="text-xs text-gray-400">Payee: {e.Vendor}</p>}
+                </div>
+                <span className="font-bold text-amber-600">{fmt(e.Amount)}</span>
+              </div>)}
+            </div>
+          })()}
+        </div>}
       </div>}
 
       {!loading&&sub==='expCat'&&<div className="card">
@@ -1221,6 +1903,84 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
   const[editBranch,setEditBranch]=useState(null);
   const[newBranch,setNewBranch]=useState(null);
   const[saving,setSaving]=useState(false);
+  
+  // Icon picker state
+  const[showIconPicker,setShowIconPicker]=useState(null); // {type:'ingredient'|'expense', category:string}
+  const[categoryIcons,setCategoryIcons]=useState({});
+  const[expenseIcons,setExpenseIcons]=useState({});
+  const[savingIcons,setSavingIcons]=useState(false);
+  const[newCatName,setNewCatName]=useState('');
+  const[addingCat,setAddingCat]=useState(null); // 'ingredient' or 'expense'
+
+  // Parse existing icons from settings
+  useEffect(()=>{
+    const ingIcons={};
+    const expIcons={};
+    if(settings.CategoryIcons){
+      settings.CategoryIcons.split(',').forEach(p=>{
+        const[name,icon]=p.split(':');
+        if(name&&icon)ingIcons[name.trim()]=icon.trim();
+      });
+    }
+    if(settings.ExpenseIcons){
+      settings.ExpenseIcons.split(',').forEach(p=>{
+        const[name,icon]=p.split(':');
+        if(name&&icon)expIcons[name.trim()]=icon.trim();
+      });
+    }
+    setCategoryIcons(ingIcons);
+    setExpenseIcons(expIcons);
+  },[settings]);
+
+  // Default icons for display
+  const defaultIngIcons={'Meat':'🥩','Seafood':'🦐','Vegetables':'🥬','Dairy':'🥛','Dry Goods':'🌾','Spices':'🌶️','Beverages':'🥤','Frozen':'🧊','Poultry':'🍗','Pork':'🐷','Beef':'🐄','Supplies':'📦','Noodles':'🍜','Sauce':'🥫','Oil':'🫒','Eggs':'🥚','Rice':'🍚','Flour':'🌾','Sugar':'🍬','Condiments':'🧂','Canned':'🥫','Paper':'📄','Cleaning':'🧹','Packaging':'📦'};
+  const defaultExpIcons={'Utilities':'💡','Rent':'🏠','Salaries':'👥','Supplies':'📦','Transportation':'🚗','Repairs':'🔧','Marketing':'📢','Miscellaneous':'📋','Food':'🍽️','Cleaning':'🧹','Equipment':'⚙️','Communication':'📱','Insurance':'🛡️','Taxes':'📊','Internet':'🌐','Water':'💧','Electric':'⚡','Gas':'🔥','Fuel':'⛽','Bank Fees':'🏦'};
+
+  // Emoji palette for picker
+  const emojiPalette=['🥩','🦐','🐟','🦑','🦀','🍗','🐷','🐄','🐔','🥬','🥕','🍅','🧅','🥔','🍆','🌽','🥒','🌶️','🧄','🥦','🍄','🥛','🧈','🥚','🧀','🌾','🍚','🍜','🥫','🫒','🧂','🍬','🥤','🧃','🍺','☕','🧊','📦','🧹','📄','🛒','💡','🏠','👥','🚗','🔧','📢','📋','🍽️','⚙️','📱','🛡️','📊','🌐','💧','⚡','🔥','⛽','🏦','💰','💵','🎯','✨','⭐','🔴','🟠','🟡','🟢','🔵','🟣','⚪','⚫'];
+
+  const getIngIcon=(cat)=>categoryIcons[cat]||defaultIngIcons[cat]||'📦';
+  const getExpIcon=(cat)=>expenseIcons[cat]||defaultExpIcons[cat]||'💰';
+
+  // Get all categories
+  const ingCategories=[...new Set([...Object.keys(defaultIngIcons),...Object.keys(categoryIcons),...(settings.IngredientCategories||'').split(',').filter(Boolean).map(s=>s.trim())])];
+  const expCategories=[...new Set([...Object.keys(defaultExpIcons),...Object.keys(expenseIcons),...(settings.ExpenseCategories||'').split(',').filter(Boolean).map(s=>s.trim())])];
+
+  const setIcon=(type,cat,icon)=>{
+    if(type==='ingredient'){
+      setCategoryIcons(prev=>({...prev,[cat]:icon}));
+    }else{
+      setExpenseIcons(prev=>({...prev,[cat]:icon}));
+    }
+    setShowIconPicker(null);
+  };
+
+  const addNewCategory=()=>{
+    if(!newCatName.trim()){showToast('Enter category name','error');return}
+    const cat=newCatName.trim();
+    if(addingCat==='ingredient'){
+      setCategoryIcons(prev=>({...prev,[cat]:'📦'}));
+    }else{
+      setExpenseIcons(prev=>({...prev,[cat]:'💰'}));
+    }
+    setShowIconPicker({type:addingCat,category:cat});
+    setNewCatName('');
+    setAddingCat(null);
+    showToast(`Added "${cat}"! Now pick an icon.`);
+  };
+
+  const saveIcons=async()=>{
+    setSavingIcons(true);
+    try{
+      const catIconStr=Object.entries(categoryIcons).map(([k,v])=>`${k}:${v}`).join(',');
+      const expIconStr=Object.entries(expenseIcons).map(([k,v])=>`${k}:${v}`).join(',');
+      
+      await api(apiUrl,'updateSettings',{settings:JSON.stringify({CategoryIcons:catIconStr,ExpenseIcons:expIconStr})});
+      showToast('Icons saved!');
+      loadAll();
+    }catch(e){showToast(e.message,'error')}
+    finally{setSavingIcons(false)}
+  };
 
   const updateUrl=()=>{localStorage.setItem('dainty_api',tempUrl);setApiUrl(tempUrl);showToast('Updated!')};
   const clearData=()=>{if(confirm('Disconnect?')){localStorage.clear();setReady(false)}};
@@ -1323,9 +2083,93 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
 
       <div className="card p-4">
         <h3 className="font-semibold text-gray-700 mb-3">🔧 System Settings</h3>
-        {Object.entries(settings).map(([k,v])=><div key={k} className="py-2 border-b"><p className="font-medium text-sm">{k}</p><p className="text-xs text-gray-500">{v}</p></div>)}
+        {Object.entries(settings).filter(([k])=>k!=='CategoryIcons'&&k!=='ExpenseIcons').map(([k,v])=><div key={k} className="py-2 border-b"><p className="font-medium text-sm">{k}</p><p className="text-xs text-gray-500 break-all">{v}</p></div>)}
         <p className="text-xs text-gray-400 mt-3">Edit in Google Sheet → Settings tab</p>
       </div>
+
+      {/* Category Icon Picker */}
+      <div className="card p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold text-gray-700">🎨 Category Icons</h3>
+          <button onClick={saveIcons} disabled={savingIcons} className="btn btn-p btn-sm">{savingIcons?'Saving...':'💾 Save'}</button>
+        </div>
+        
+        <p className="text-xs text-gray-500 mb-3">Tap any icon to change it</p>
+        
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="text-sm font-medium text-gray-600">🥬 Ingredient Categories</h4>
+          <button onClick={()=>setAddingCat('ingredient')} className="text-xs text-blue-600 font-medium">+ Add New</button>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-4">
+          {ingCategories.sort().map(cat=>
+            <button key={cat} onClick={()=>setShowIconPicker({type:'ingredient',category:cat})} className="flex items-center gap-1 px-3 py-1.5 bg-gray-100 rounded-full hover:bg-gray-200 transition">
+              <span className="text-lg">{getIngIcon(cat)}</span>
+              <span className="text-xs text-gray-600">{cat}</span>
+              {categoryIcons[cat]&&<span className="text-xs text-green-500">✓</span>}
+            </button>
+          )}
+        </div>
+        
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="text-sm font-medium text-gray-600">💰 Expense Categories</h4>
+          <button onClick={()=>setAddingCat('expense')} className="text-xs text-blue-600 font-medium">+ Add New</button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {expCategories.sort().map(cat=>
+            <button key={cat} onClick={()=>setShowIconPicker({type:'expense',category:cat})} className="flex items-center gap-1 px-3 py-1.5 bg-amber-50 rounded-full hover:bg-amber-100 transition">
+              <span className="text-lg">{getExpIcon(cat)}</span>
+              <span className="text-xs text-gray-600">{cat}</span>
+              {expenseIcons[cat]&&<span className="text-xs text-green-500">✓</span>}
+            </button>
+          )}
+        </div>
+        
+        <p className="text-xs text-gray-400 mt-3">✓ = custom icon. Changes apply after Save.</p>
+      </div>
+
+      {/* Add New Category Modal */}
+      {addingCat&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setAddingCat(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-sm w-full fade" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold">➕ New {addingCat==='ingredient'?'Ingredient':'Expense'} Category</h3>
+            <button onClick={()=>setAddingCat(null)} className="text-2xl text-gray-400">✕</button>
+          </div>
+          
+          <div className="mb-4">
+            <label className="lbl">Category Name</label>
+            <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addNewCategory()} className="inp" placeholder="e.g. Noodles, Fuel, etc." autoFocus/>
+          </div>
+          
+          <div className="flex gap-3">
+            <button onClick={()=>setAddingCat(null)} className="flex-1 btn btn-s">Cancel</button>
+            <button onClick={addNewCategory} className="flex-1 btn btn-p">Add & Pick Icon</button>
+          </div>
+        </div>
+      </div>}
+
+      {/* Icon Picker Modal */}
+      {showIconPicker&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setShowIconPicker(null)}>
+        <div className="bg-white rounded-2xl p-4 max-w-sm w-full max-h-[80vh] overflow-y-auto fade" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold">Pick icon for: <span className="text-red-600">{showIconPicker.category}</span></h3>
+            <button onClick={()=>setShowIconPicker(null)} className="text-2xl text-gray-400">✕</button>
+          </div>
+          
+          <div className="grid grid-cols-8 gap-2">
+            {emojiPalette.map((emoji,i)=>
+              <button key={i} onClick={()=>setIcon(showIconPicker.type,showIconPicker.category,emoji)} className="text-2xl p-2 rounded-lg hover:bg-gray-100 transition">{emoji}</button>
+            )}
+          </div>
+          
+          <div className="mt-4 pt-4 border-t">
+            <p className="text-xs text-gray-500 mb-2">Or type/paste custom emoji:</p>
+            <div className="flex gap-2">
+              <input type="text" maxLength="2" className="inp text-center text-2xl flex-1" placeholder="🎯" onKeyDown={e=>{if(e.key==='Enter'&&e.target.value)setIcon(showIconPicker.type,showIconPicker.category,e.target.value)}}/>
+              <button onClick={e=>{const inp=e.target.parentElement.querySelector('input');if(inp.value)setIcon(showIconPicker.type,showIconPicker.category,inp.value)}} className="btn btn-p">Set</button>
+            </div>
+          </div>
+        </div>
+      </div>}
 
       <div className="card p-4 border-2 border-red-200">
         <h3 className="font-semibold text-red-600 mb-3">⚠️ Danger Zone</h3>

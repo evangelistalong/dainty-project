@@ -26,6 +26,9 @@
     .inp{width:100%;border:1px solid #e5e7eb;border-radius:10px;padding:12px;background:#fff}
     .inp:focus{outline:none;border-color:#b91c1c;box-shadow:0 0 0 3px rgba(185,28,28,.1)}
     .lbl{font-size:12px;color:#6b7280;font-weight:500;display:block;margin-bottom:4px}
+    .slide-up{animation:slideUp .3s ease-out}
+    @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+    .btn-amber{background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff}
   </style>
 </head>
 <body>
@@ -90,8 +93,29 @@ function App(){
   const[expenses,setExpenses]=useState([]);
   const[loginError,setLoginError]=useState('');
   const[viewDays,setViewDays]=useState(0); // 0 = today only
+  
+  // UI Mode: 'form' (original) or 'shop' (shopping cart style)
+  const[uiMode,setUiMode]=useState(localStorage.getItem('dainty_ui_mode')||'shop');
+  
+  // Shopping cart states
+  const[cart,setCart]=useState([]);
+  const[expenseCart,setExpenseCart]=useState([]);
+  const[showCart,setShowCart]=useState(false);
+  const[showExpenseCart,setShowExpenseCart]=useState(false);
 
   const showToast=(msg,type='success')=>{setToast({msg,type});setTimeout(()=>setToast(null),3000)};
+
+  const toggleUiMode=()=>{
+    const newMode=uiMode==='form'?'shop':'form';
+    setUiMode(newMode);
+    localStorage.setItem('dainty_ui_mode',newMode);
+    showToast(newMode==='shop'?'🛒 Shopping Mode':'📝 Form Mode');
+  };
+
+  const cartTotal=cart.reduce((s,c)=>s+(parseFloat(c.extTotal)||0),0);
+  const cartCount=cart.length;
+  const expenseTotal=expenseCart.reduce((s,c)=>s+(parseFloat(c.Amount)||0),0);
+  const expenseCount=expenseCart.length;
 
   const checkSavedAuth=useCallback(async()=>{
     const savedUrl=API_URL||localStorage.getItem('dainty_api');
@@ -161,10 +185,35 @@ function App(){
         api(apiUrl,'getPurchases',{branch:BRANCH_NAME,days:days||30}),
         api(apiUrl,'getExpenses',{branch:BRANCH_NAME,days:days||30})
       ]);
-      const today=new Date().toISOString().split('T')[0];
-      const cutoff=days===0?today:new Date(Date.now()-days*24*60*60*1000).toISOString().split('T')[0];
-      setPurchases((p.purchases||[]).filter(x=>days===0?x.PurchaseDate===today:x.PurchaseDate>=cutoff));
-      setExpenses((e.expenses||[]).filter(x=>days===0?x.Date===today:x.Date>=cutoff));
+      const today=new Date();
+      today.setHours(0,0,0,0);
+      const cutoff=new Date(today);
+      cutoff.setDate(cutoff.getDate()-days);
+      
+      const parseDate=(d)=>{
+        if(!d)return null;
+        let date;
+        if(typeof d==='string'&&d.includes('T')){
+          date=new Date(d);
+        }else if(typeof d==='string'&&d.match(/^\d{4}-\d{2}-\d{2}$/)){
+          date=new Date(d+'T00:00:00');
+        }else{
+          date=new Date(d);
+        }
+        if(isNaN(date.getTime()))return null;
+        date.setHours(0,0,0,0);
+        return date;
+      };
+      
+      const isInRange=(dateStr,days)=>{
+        const d=parseDate(dateStr);
+        if(!d)return false;
+        if(days===0)return d.getTime()===today.getTime();
+        return d>=cutoff;
+      };
+      
+      setPurchases((p.purchases||[]).filter(x=>isInRange(x.PurchaseDate,days)));
+      setExpenses((e.expenses||[]).filter(x=>isInRange(x.Date,days)));
     }catch(e){console.error(e)}
   },[apiUrl]);
 
@@ -202,8 +251,27 @@ function App(){
     </div>
   );
 
-  const todayPurchases=purchases.filter(p=>p.PurchaseDate===new Date().toISOString().split('T')[0]);
-  const todayExpenses=expenses.filter(e=>e.Date===new Date().toISOString().split('T')[0]);
+  const parseDate=(d)=>{
+    if(!d)return null;
+    let date;
+    if(typeof d==='string'&&d.includes('T')){
+      date=new Date(d);
+    }else if(typeof d==='string'&&d.match(/^\d{4}-\d{2}-\d{2}$/)){
+      date=new Date(d+'T00:00:00');
+    }else{
+      date=new Date(d);
+    }
+    if(isNaN(date.getTime()))return null;
+    date.setHours(0,0,0,0);
+    return date;
+  };
+  
+  const todayDate=new Date();
+  todayDate.setHours(0,0,0,0);
+  const isToday=(dateStr)=>{const d=parseDate(dateStr);return d&&d.getTime()===todayDate.getTime()};
+  
+  const todayPurchases=purchases.filter(p=>isToday(p.PurchaseDate));
+  const todayExpenses=expenses.filter(e=>isToday(e.Date));
   const todayPTotal=todayPurchases.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
   const todayETotal=todayExpenses.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
 
@@ -221,6 +289,27 @@ function App(){
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Mode Toggle */}
+            <button onClick={toggleUiMode} className="px-3 py-1.5 rounded-lg bg-white/20 text-sm font-medium hover:bg-white/30 flex items-center gap-1" title={uiMode==='form'?'Switch to Shopping Mode':'Switch to Form Mode'}>
+              {uiMode==='shop'?'🛒':'📝'}<span className="text-xs">{uiMode==='shop'?'Shop':'Form'}</span>
+            </button>
+            
+            {/* Cart Button (shopping mode) */}
+            {uiMode==='shop'&&tab==='purchases'&&(
+              <button onClick={()=>setShowCart(true)} className="relative px-3 py-1 rounded-lg bg-white/20 flex items-center gap-1 hover:bg-white/30">
+                <span>🛒</span>
+                <span className="text-sm font-bold">₱{cartTotal.toLocaleString()}</span>
+                {cartCount>0&&<span className="absolute -top-1 -right-1 bg-yellow-400 text-black text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">{cartCount}</span>}
+              </button>
+            )}
+            {uiMode==='shop'&&tab==='expenses'&&(
+              <button onClick={()=>setShowExpenseCart(true)} className="relative px-3 py-1 rounded-lg bg-white/20 flex items-center gap-1 hover:bg-white/30">
+                <span>🧾</span>
+                <span className="text-sm font-bold">₱{expenseTotal.toLocaleString()}</span>
+                {expenseCount>0&&<span className="absolute -top-1 -right-1 bg-yellow-400 text-black text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">{expenseCount}</span>}
+              </button>
+            )}
+            
             {loading&&<div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full spin"/>}
             <button onClick={()=>{loadAll();loadTx(viewDays)}} className="p-2 rounded-lg hover:bg-white/20 text-xl">🔄</button>
             <button onClick={logout} className="p-2 rounded-lg hover:bg-white/20 text-sm">🚪</button>
@@ -229,11 +318,26 @@ function App(){
       </header>
 
       <main className="p-4 pb-24">
-        {tab==='dashboard'&&<BranchDashboard purchases={purchases} expenses={expenses} ingredients={ingredients} todayPurchases={todayPurchases} todayExpenses={todayExpenses} todayPTotal={todayPTotal} todayETotal={todayETotal} setTab={setTab}/>}
-        {tab==='purchases'&&<Purchases apiUrl={apiUrl} settings={settings} purchases={purchases} showToast={showToast} loadTx={()=>loadTx(viewDays)} ingredients={ingredients} viewDays={viewDays} setViewDays={setViewDays}/>}
-        {tab==='expenses'&&<Expenses apiUrl={apiUrl} settings={settings} expenses={expenses} showToast={showToast} loadTx={()=>loadTx(viewDays)} viewDays={viewDays} setViewDays={setViewDays}/>}
-        {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} showToast={showToast} loadAll={loadAll}/>}
+        {uiMode==='form'?(
+          <>
+            {tab==='dashboard'&&<BranchDashboard purchases={purchases} expenses={expenses} ingredients={ingredients} todayPurchases={todayPurchases} todayExpenses={todayExpenses} todayPTotal={todayPTotal} todayETotal={todayETotal} setTab={setTab}/>}
+            {tab==='purchases'&&<Purchases apiUrl={apiUrl} settings={settings} purchases={purchases} showToast={showToast} loadTx={()=>loadTx(viewDays)} ingredients={ingredients} viewDays={viewDays} setViewDays={setViewDays}/>}
+            {tab==='expenses'&&<Expenses apiUrl={apiUrl} settings={settings} expenses={expenses} showToast={showToast} loadTx={()=>loadTx(viewDays)} viewDays={viewDays} setViewDays={setViewDays}/>}
+            {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} showToast={showToast} loadAll={loadAll}/>}
+          </>
+        ):(
+          <>
+            {tab==='dashboard'&&<BranchDashboard purchases={purchases} expenses={expenses} ingredients={ingredients} todayPurchases={todayPurchases} todayExpenses={todayExpenses} todayPTotal={todayPTotal} todayETotal={todayETotal} setTab={setTab}/>}
+            {tab==='purchases'&&<ShopView ingredients={ingredients} settings={settings} purchases={purchases} cart={cart} setCart={setCart} showToast={showToast} apiUrl={apiUrl} loadAll={loadAll}/>}
+            {tab==='expenses'&&<ExpenseShop settings={settings} expenseCart={expenseCart} setExpenseCart={setExpenseCart} showToast={showToast}/>}
+            {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} showToast={showToast} loadAll={loadAll}/>}
+          </>
+        )}
       </main>
+
+      {/* Cart Modals (shopping mode) */}
+      {showCart&&<PurchaseCartModal cart={cart} setCart={setCart} cartTotal={cartTotal} onClose={()=>setShowCart(false)} settings={settings} apiUrl={apiUrl} showToast={showToast} loadAll={()=>{loadAll();loadTx(viewDays)}}/>}
+      {showExpenseCart&&<ExpenseCartModal cart={expenseCart} setCart={setExpenseCart} cartTotal={expenseTotal} onClose={()=>setShowExpenseCart(false)} settings={settings} apiUrl={apiUrl} showToast={showToast} loadAll={()=>{loadAll();loadTx(viewDays)}}/>}
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex z-40">
         {[
@@ -255,23 +359,60 @@ function App(){
 
 // Branch Dashboard Component
 function BranchDashboard({purchases,expenses,ingredients,todayPurchases,todayExpenses,todayPTotal,todayETotal,setTab}){
-  const today=new Date().toISOString().split('T')[0];
-  const week=new Date();week.setDate(week.getDate()-7);
-  const weekStr=week.toISOString().split('T')[0];
+  const parseDate=(d)=>{
+    if(!d)return null;
+    let date;
+    if(typeof d==='string'&&d.includes('T')){
+      date=new Date(d);
+    }else if(typeof d==='string'&&d.match(/^\d{4}-\d{2}-\d{2}$/)){
+      date=new Date(d+'T00:00:00');
+    }else{
+      date=new Date(d);
+    }
+    if(isNaN(date.getTime()))return null;
+    date.setHours(0,0,0,0);
+    return date;
+  };
   
-  const weekPurchases=purchases.filter(p=>p.PurchaseDate>=weekStr);
-  const weekExpenses=expenses.filter(e=>e.Date>=weekStr);
+  const weekCutoff=new Date();
+  weekCutoff.setDate(weekCutoff.getDate()-7);
+  weekCutoff.setHours(0,0,0,0);
+  
+  const isInWeek=(dateStr)=>{const d=parseDate(dateStr);return d&&d>=weekCutoff};
+  
+  const weekPurchases=purchases.filter(p=>isInWeek(p.PurchaseDate));
+  const weekExpenses=expenses.filter(e=>isInWeek(e.Date));
   const weekPTotal=weekPurchases.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
   const weekETotal=weekExpenses.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
   
-  // Recent activity (last 10 items combined)
+  // Recent activity (last 10 items combined) with more details
   const recentItems=[
-    ...todayPurchases.slice(0,5).map(p=>({type:'purchase',name:p.ItemName,amount:p.Price,time:p.Timestamp})),
-    ...todayExpenses.slice(0,5).map(e=>({type:'expense',name:e.Description,amount:e.Amount,time:e.Timestamp}))
-  ].sort((a,b)=>new Date(b.time)-new Date(a.time)).slice(0,8);
+    ...todayPurchases.slice(0,10).map(p=>({type:'purchase',name:p.ItemName,amount:p.Price,time:p.Timestamp,supplier:p.Supplier,po:p.PO,photo:p.InvoicePhoto,qty:p.Qty,unit:p.ContainerUnit||p.BaseUnit})),
+    ...todayExpenses.slice(0,10).map(e=>({type:'expense',name:e.Description||e.Category,amount:e.Amount,time:e.Timestamp,payee:e.Vendor,category:e.Category,photo:e.ReceiptPhoto}))
+  ].sort((a,b)=>new Date(b.time)-new Date(a.time)).slice(0,10);
+  
+  // Group purchases by supplier
+  const purchasesBySupplier={};
+  todayPurchases.forEach(p=>{
+    const key=p.Supplier||'(No Supplier)';
+    if(!purchasesBySupplier[key])purchasesBySupplier[key]={items:[],total:0,photo:p.InvoicePhoto};
+    purchasesBySupplier[key].items.push(p);
+    purchasesBySupplier[key].total+=parseFloat(p.Price)||0;
+  });
+  
+  const[activityView,setActivityView]=useState('recent'); // 'recent' or 'grouped'
+  const[viewPhoto,setViewPhoto]=useState(null);
 
   return(
     <div className="space-y-4 fade">
+      {/* Photo Viewer Modal */}
+      {viewPhoto&&<div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4" onClick={()=>setViewPhoto(null)}>
+        <div className="max-w-lg w-full">
+          <img src={viewPhoto} alt="Receipt/Invoice" className="w-full rounded-lg"/>
+          <p className="text-center text-white mt-3 text-sm">Tap anywhere to close</p>
+        </div>
+      </div>}
+      
       <h2 className="text-lg font-bold text-gray-800">📊 Dashboard</h2>
       
       {/* Today's Summary */}
@@ -324,23 +465,59 @@ function BranchDashboard({purchases,expenses,ingredients,todayPurchases,todayExp
         </div>
       </div>
       
-      {/* Recent Activity */}
+      {/* Recent Activity - Enhanced */}
       <div className="card">
-        <div className="p-3 border-b bg-gray-50">
+        <div className="p-3 border-b bg-gray-50 flex justify-between items-center">
           <span className="font-semibold text-gray-700">🕐 Recent Activity</span>
+          <div className="flex gap-1">
+            <button onClick={()=>setActivityView('recent')} className={`px-2 py-1 rounded text-xs ${activityView==='recent'?'bg-red-600 text-white':'bg-gray-200'}`}>Timeline</button>
+            <button onClick={()=>setActivityView('grouped')} className={`px-2 py-1 rounded text-xs ${activityView==='grouped'?'bg-red-600 text-white':'bg-gray-200'}`}>By Supplier</button>
+          </div>
         </div>
-        <div className="max-h-64 overflow-y-auto">
-          {recentItems.length===0?<p className="p-6 text-center text-gray-400">No activity today</p>:
+        <div className="max-h-80 overflow-y-auto">
+          {activityView==='recent'?(
+            recentItems.length===0?<p className="p-6 text-center text-gray-400">No activity today</p>:
             recentItems.map((item,i)=>
               <div key={i} className="p-3 border-b flex items-center">
                 <span className="text-xl mr-3">{item.type==='purchase'?'🛒':'💰'}</span>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{item.name}</p>
-                  <p className="text-xs text-gray-500">{item.type==='purchase'?'Purchase':'Expense'}</p>
+                  <p className="text-xs text-gray-500">
+                    {item.type==='purchase'?
+                      <span>{item.supplier||'No supplier'} {item.qty&&<span>• {item.qty} {item.unit}</span>}</span>:
+                      <span>{item.category} {item.payee&&<span>• {item.payee}</span>}</span>
+                    }
+                  </p>
                 </div>
+                {item.photo&&<button onClick={()=>setViewPhoto(item.photo)} className="text-blue-500 mr-2 text-lg">📷</button>}
                 <span className={`font-bold ${item.type==='purchase'?'text-red-700':'text-amber-600'}`}>{fmt(item.amount)}</span>
               </div>
-            )}
+            )
+          ):(
+            Object.keys(purchasesBySupplier).length===0?<p className="p-6 text-center text-gray-400">No purchases today</p>:
+            Object.entries(purchasesBySupplier).map(([supplier,data])=>
+              <div key={supplier} className="border-b">
+                <div className="p-3 bg-gray-50 flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{supplier}</span>
+                    <span className="text-xs bg-gray-200 px-2 py-0.5 rounded-full">{data.items.length} items</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {data.photo&&<button onClick={()=>setViewPhoto(data.photo)} className="text-blue-500 text-lg">📷</button>}
+                    <span className="font-bold text-red-700">{fmt(data.total)}</span>
+                  </div>
+                </div>
+                <div className="pl-4">
+                  {data.items.map((p,i)=>
+                    <div key={i} className="p-2 border-b border-gray-100 flex justify-between text-sm">
+                      <span className="text-gray-600">{p.ItemName} <span className="text-gray-400">({p.Qty} {p.ContainerUnit||p.BaseUnit})</span></span>
+                      <span className="text-red-600">{fmt(p.Price)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          )}
         </div>
       </div>
     </div>
@@ -350,6 +527,7 @@ function BranchDashboard({purchases,expenses,ingredients,todayPurchases,todayExp
 function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewDays,setViewDays}){
   const[saving,setSaving]=useState(false);
   const[uploading,setUploading]=useState(false);
+  const[priceWarning,setPriceWarning]=useState(null); // {item, unitPrice, avgPrice, variance, recentPrices}
   
   // Header info (shared by all items in this PO)
   const[header,setHeader]=useState({
@@ -443,8 +621,68 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
     return totalBase>0?(price/totalBase):0;
   };
 
+  // Get price history for an ingredient
+  const getPriceHistory=(sku)=>{
+    const history=purchases.filter(p=>String(p.MasterSKU)===String(sku)&&parseFloat(p.UnitPrice)>0);
+    if(history.length===0)return null;
+    const prices=history.map(p=>parseFloat(p.UnitPrice));
+    const sorted=history.sort((a,b)=>new Date(b.PurchaseDate)-new Date(a.PurchaseDate));
+    return{
+      avgPrice:prices.reduce((a,b)=>a+b,0)/prices.length,
+      minPrice:Math.min(...prices),
+      maxPrice:Math.max(...prices),
+      count:history.length,
+      recent:sorted.slice(0,5).map(p=>({date:p.PurchaseDate,price:parseFloat(p.UnitPrice),supplier:p.Supplier}))
+    };
+  };
+
+  // Check price variance and return warning if needed
+  const checkPriceVariance=(newItem)=>{
+    const history=getPriceHistory(newItem.MasterSKU);
+    const ing=ingredients.find(i=>String(i.MasterSKU)===String(newItem.MasterSKU));
+    const marketPrice=parseFloat(ing?.MarketPrice)||0;
+    
+    const currentUnitPrice=newItem.unitPrice;
+    
+    // Compare to purchase history first, then market price
+    let comparePrice=0;
+    let compareSource='';
+    
+    if(history&&history.avgPrice>0){
+      comparePrice=history.avgPrice;
+      compareSource='purchase history';
+    }else if(marketPrice>0){
+      comparePrice=marketPrice;
+      compareSource='market price';
+    }else{
+      return null; // No price to compare against
+    }
+    
+    const variance=((currentUnitPrice-comparePrice)/comparePrice)*100;
+    const absVariance=Math.abs(variance);
+    
+    // Threshold settings
+    const warnThreshold=30;  // 30% = yellow warning
+    const blockThreshold=50; // 50% = red warning, require confirm
+    
+    if(absVariance>=warnThreshold){
+      return{
+        item:newItem,
+        currentPrice:currentUnitPrice,
+        avgPrice:comparePrice,
+        variance:variance.toFixed(1),
+        absVariance:absVariance,
+        source:compareSource,
+        history:history,
+        level:absVariance>=blockThreshold?'high':'medium',
+        direction:variance>0?'higher':'lower'
+      };
+    }
+    return null;
+  };
+
   // Post item to temporary list
-  const postItem=()=>{
+  const postItem=(forcePost=false)=>{
     if(!item.ItemName){showToast('Select an ingredient','error');return}
     if(!item.Qty){showToast('Enter quantity','error');return}
     if(!item.Price){showToast('Enter price','error');return}
@@ -461,9 +699,29 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
       unitPrice:calcUnitPrice({...item,Price:extTotal})  // Pass total for unit price calc
     };
     
+    // Check price variance (skip if force posting)
+    if(!forcePost){
+      const warning=checkPriceVariance(newItem);
+      if(warning){
+        setPriceWarning(warning);
+        return;
+      }
+    }
+    
     setPostedItems([...postedItems,newItem]);
     setItem({ItemName:'',MasterSKU:'',BaseUnit:'g',Description:'',ContainerType:'',ContainerSize:'',ContainerUnit:'kg',Qty:'',Price:'',Notes:''});
-    showToast('Item posted!');
+    setPriceWarning(null);
+    showToast('Item added!');
+  };
+
+  // Confirm price warning and post anyway
+  const confirmPriceWarning=()=>{
+    if(priceWarning?.item){
+      setPostedItems([...postedItems,priceWarning.item]);
+      setItem({ItemName:'',MasterSKU:'',BaseUnit:'g',Description:'',ContainerType:'',ContainerSize:'',ContainerUnit:'kg',Qty:'',Price:'',Notes:''});
+      setPriceWarning(null);
+      showToast('Item added!');
+    }
   };
 
   // Remove item from temp list
@@ -528,6 +786,45 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
         </div>
       </div>}
 
+      {/* Price Warning Modal */}
+      {priceWarning&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-4 max-w-sm w-full fade">
+          <div className={`text-center p-3 rounded-xl mb-3 ${priceWarning.level==='high'?'bg-red-100':'bg-amber-100'}`}>
+            <span className="text-3xl">{priceWarning.level==='high'?'🚨':'⚠️'}</span>
+            <h3 className={`font-bold text-lg ${priceWarning.level==='high'?'text-red-700':'text-amber-700'}`}>Price Check Required</h3>
+          </div>
+          
+          <div className="space-y-3">
+            <div className="text-center">
+              <p className="font-bold text-lg">{priceWarning.item?.ItemName}</p>
+              <p className="text-2xl font-bold text-gray-800">₱{priceWarning.currentPrice?.toFixed(4)}<span className="text-sm text-gray-500">/{priceWarning.item?.BaseUnit}</span></p>
+            </div>
+            
+            <div className={`p-3 rounded-xl text-center ${priceWarning.level==='high'?'bg-red-50':'bg-amber-50'}`}>
+              <p className="text-sm">This is <span className="font-bold text-lg">{priceWarning.absVariance?.toFixed(0)}% {priceWarning.direction}</span></p>
+              <p className="text-xs text-gray-600">than {priceWarning.source} (₱{priceWarning.avgPrice?.toFixed(4)})</p>
+            </div>
+            
+            {priceWarning.history?.recent?.length>0&&<div>
+              <p className="text-xs text-gray-500 mb-1">Recent purchases:</p>
+              <div className="text-xs space-y-1 max-h-24 overflow-y-auto">
+                {priceWarning.history.recent.map((r,i)=>
+                  <div key={i} className="flex justify-between bg-gray-50 p-1 rounded">
+                    <span className="text-gray-600">{r.date} • {r.supplier||'?'}</span>
+                    <span className="font-medium">₱{r.price?.toFixed(4)}</span>
+                  </div>
+                )}
+              </div>
+            </div>}
+            
+            <div className="flex gap-2 pt-2">
+              <button onClick={()=>setPriceWarning(null)} className="btn btn-s flex-1">✏️ Edit Entry</button>
+              <button onClick={confirmPriceWarning} className={`btn flex-1 text-white ${priceWarning.level==='high'?'bg-red-600':'bg-amber-500'}`}>✅ Confirm Correct</button>
+            </div>
+          </div>
+        </div>
+      </div>}
+
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">🛒 Purchase Entry</h2>
       </div>
@@ -536,21 +833,21 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
       <div className="card p-4 space-y-3 bg-gradient-to-r from-red-800 to-red-700 text-white">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-red-200">Date</label>
+            <label className="text-xs text-red-200">Purchase Date</label>
             <input type="date" value={header.PurchaseDate} onChange={e=>setHeader({...header,PurchaseDate:e.target.value})} className="inp bg-white/20 border-white/30 text-white"/>
           </div>
           <div>
-            <label className="text-xs text-red-200">Vendor</label>
-            <input value={header.Supplier} onChange={e=>setHeader({...header,Supplier:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Supplier name"/>
+            <label className="text-xs text-red-200">Supplier Name</label>
+            <input value={header.Supplier} onChange={e=>setHeader({...header,Supplier:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Where did you buy from?"/>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-red-200">P.O. #</label>
-            <input value={header.PO} onChange={e=>setHeader({...header,PO:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Optional"/>
+            <label className="text-xs text-red-200">P.O. / Invoice #</label>
+            <input value={header.PO} onChange={e=>setHeader({...header,PO:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Reference number"/>
           </div>
           <div>
-            <label className="text-xs text-red-200">Pay Method</label>
+            <label className="text-xs text-red-200">Payment Method</label>
             <select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp bg-white/20 border-white/30 text-white">
               {payMethods.map(m=><option key={m} value={m.trim()} className="text-black">{m.trim()}</option>)}
             </select>
@@ -589,14 +886,14 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
         {/* Item Name with Search */}
         <div className="grid grid-cols-3 gap-2">
           <div className="col-span-2 relative">
-            <label className="text-xs text-gray-500">Item Name</label>
+            <label className="text-xs text-gray-500">Ingredient Name (Search)</label>
             <input 
               value={item.ItemName} 
               onChange={e=>{setItem({...item,ItemName:e.target.value});setSearch(e.target.value);setShowSearch(true)}}
               onFocus={()=>setShowSearch(true)}
               onBlur={()=>setTimeout(()=>setShowSearch(false),200)}
               className="inp" 
-              placeholder="Search ingredient..."
+              placeholder="Type to search ingredients..."
             />
             {showSearch&&search&&filteredIng.length>0&&(
               <div className="absolute top-full left-0 right-0 bg-white border rounded-lg shadow-lg z-20 max-h-48 overflow-y-auto">
@@ -610,34 +907,34 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
             )}
           </div>
           <div>
-            <label className="text-xs text-gray-500">Code</label>
+            <label className="text-xs text-gray-500">SKU Code</label>
             <input value={item.MasterSKU} readOnly className="inp bg-gray-100 text-gray-500" placeholder="Auto"/>
           </div>
         </div>
 
         <div>
-          <label className="text-xs text-gray-500">Description / Notes</label>
-          <input value={item.Description} onChange={e=>setItem({...item,Description:e.target.value})} className="inp" placeholder="Optional details"/>
+          <label className="text-xs text-gray-500">Description / Notes (Optional)</label>
+          <input value={item.Description} onChange={e=>setItem({...item,Description:e.target.value})} className="inp" placeholder="Brand, variant, or special notes"/>
         </div>
 
         <div className="grid grid-cols-4 gap-2">
           <div>
-            <label className="text-xs text-gray-500">QTY</label>
+            <label className="text-xs text-gray-500">How Many?</label>
             <input type="number" value={item.Qty} onChange={e=>setItem({...item,Qty:e.target.value})} className="inp text-center font-bold" placeholder="0"/>
           </div>
           <div>
-            <label className="text-xs text-gray-500">Container</label>
+            <label className="text-xs text-gray-500">Container Type</label>
             <select value={item.ContainerType} onChange={e=>setItem({...item,ContainerType:e.target.value})} className="inp text-sm">
               <option value="">(None)</option>
               {containerTypes.map(c=><option key={c} value={c.trim()}>{c.trim()}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs text-gray-500">Size</label>
+            <label className="text-xs text-gray-500">Container Size</label>
             <input type="number" value={item.ContainerSize} onChange={e=>setItem({...item,ContainerSize:e.target.value})} className="inp text-center" placeholder="0" step="0.1"/>
           </div>
           <div>
-            <label className="text-xs text-gray-500">Unit</label>
+            <label className="text-xs text-gray-500">Size Unit</label>
             <select value={item.ContainerUnit} onChange={e=>setItem({...item,ContainerUnit:e.target.value})} className="inp text-sm">
               {containerUnits.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}
             </select>
@@ -646,7 +943,7 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-xs text-gray-500">Price /: (per {item.ContainerType||'unit'})</label>
+            <label className="text-xs text-gray-500">Price per {item.ContainerType||'Unit'}</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">₱</span>
               <input type="number" value={item.Price} onChange={e=>setItem({...item,Price:e.target.value})} className="inp pl-8 text-lg font-bold" placeholder="0.00" step="0.01"/>
@@ -654,7 +951,7 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
           </div>
           <div className="flex items-end">
             <button onClick={postItem} className="btn btn-p w-full py-3 text-lg">
-              📥 Post Item
+              📥 Add to List
             </button>
           </div>
         </div>
@@ -749,7 +1046,7 @@ function Purchases({apiUrl,settings,purchases,showToast,loadTx,ingredients,viewD
                 </button>}
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm">{p.ItemName}</p>
-                  <p className="text-xs text-gray-500">{p.Qty} {p.ContainerType||p.Unit}{p.WeightPerContainer?' ('+p.WeightPerContainer+')':''} • {p.Supplier||'No vendor'}</p>
+                  <p className="text-xs text-gray-500">{p.Qty} {p.ContainerType||p.Unit}{p.WeightPerContainer?' ('+p.WeightPerContainer+')':''} • {p.Supplier||'No supplier'}</p>
                 </div>
                 <span className="font-bold text-red-700">{fmt(p.Price)}</span>
               </div>
@@ -893,21 +1190,21 @@ function Expenses({apiUrl,settings,expenses,showToast,loadTx,viewDays,setViewDay
       <div className="card p-4 space-y-3 bg-gradient-to-r from-amber-700 to-amber-600 text-white">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-amber-200">Date</label>
+            <label className="text-xs text-amber-200">Expense Date</label>
             <input type="date" value={header.Date} onChange={e=>setHeader({...header,Date:e.target.value})} className="inp bg-white/20 border-white/30 text-white"/>
           </div>
           <div>
-            <label className="text-xs text-amber-200">Vendor</label>
-            <input value={header.Vendor} onChange={e=>setHeader({...header,Vendor:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Optional"/>
+            <label className="text-xs text-amber-200">Payee (Who was paid?)</label>
+            <input value={header.Vendor} onChange={e=>setHeader({...header,Vendor:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Store, person, or company"/>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-amber-200">Reference #</label>
-            <input value={header.Reference} onChange={e=>setHeader({...header,Reference:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="Optional"/>
+            <label className="text-xs text-amber-200">Receipt / Reference #</label>
+            <input value={header.Reference} onChange={e=>setHeader({...header,Reference:e.target.value})} className="inp bg-white/20 border-white/30 text-white placeholder-white/50" placeholder="OR number, etc."/>
           </div>
           <div>
-            <label className="text-xs text-amber-200">Pay Method</label>
+            <label className="text-xs text-amber-200">Payment Method</label>
             <select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp bg-white/20 border-white/30 text-white">
               {payMethods.map(m=><option key={m} value={m.trim()} className="text-black">{m.trim()}</option>)}
             </select>
@@ -1040,7 +1337,7 @@ function Expenses({apiUrl,settings,expenses,showToast,loadTx,viewDays,setViewDay
                 </button>}
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm">{e.Description}</p>
-                  <p className="text-xs text-gray-500">{e.Category} • {e.Vendor||'No vendor'}</p>
+                  <p className="text-xs text-gray-500">{e.Category} • {e.Vendor||'No payee'}</p>
                 </div>
                 <span className="font-bold text-amber-600">{fmt(e.Amount)}</span>
               </div>
@@ -1105,6 +1402,345 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
               </div>
             )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// SHOPPING MODE COMPONENTS
+// ════════════════════════════════════════════════════════════════
+
+function ShopView({ingredients,settings,purchases,cart,setCart,showToast,apiUrl,loadAll}){
+  const[search,setSearch]=useState('');
+  const[category,setCategory]=useState('All');
+  const[quickAdd,setQuickAdd]=useState(null);
+  const[showNewIngredient,setShowNewIngredient]=useState(false);
+  const[newIng,setNewIng]=useState({Name:'',Category:'',Unit:'g',ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});
+  const[saving,setSaving]=useState(false);
+
+  const categories=['All',...new Set(ingredients.map(i=>i.Category).filter(Boolean))];
+  const defaultCategories=['Meat','Seafood','Vegetables','Dairy','Dry Goods','Spices','Beverages','Frozen','Poultry','Supplies'];
+  const allCategories=[...new Set([...categories.filter(c=>c!=='All'),...defaultCategories])];
+  
+  const filtered=ingredients.filter(i=>{
+    const matchSearch=!search||i.Name?.toLowerCase().includes(search.toLowerCase());
+    const matchCat=category==='All'||i.Category===category;
+    return matchSearch&&matchCat;
+  });
+
+  const containerTypes=(settings.ContainerTypes||'Sack,Bottle,Can,Box,Pack,Drum,Bag,Tray,Loose').split(',');
+  const containerUnits=(settings.ContainerUnits||'kg,g,L,ml,pcs').split(',');
+
+  const getRecentPrice=(sku)=>{
+    const recent=purchases.filter(p=>String(p.MasterSKU)===String(sku)).sort((a,b)=>new Date(b.PurchaseDate)-new Date(a.PurchaseDate))[0];
+    return recent?{price:parseFloat(recent.UnitPrice),container:recent.ContainerType,size:recent.WeightPerContainer}:null;
+  };
+
+  const calcUnitPrice=(item)=>{
+    const qty=parseFloat(item.Qty)||0;
+    const price=parseFloat(item.Price)||0;
+    const size=parseFloat(item.ContainerSize)||0;
+    const cu=(item.ContainerUnit||'kg').toLowerCase();
+    const bu=(item.BaseUnit||'g').toLowerCase();
+    let totalBase=qty;
+    if(size>0){
+      let containerInBase=size;
+      if(cu==='kg'&&bu==='g')containerInBase=size*1000;
+      else if(cu==='l'&&bu==='ml')containerInBase=size*1000;
+      totalBase=qty*containerInBase;
+    }else{
+      if(cu==='kg'&&bu==='g')totalBase=qty*1000;
+      else if(cu==='l'&&bu==='ml')totalBase=qty*1000;
+    }
+    return totalBase>0?(price/totalBase):0;
+  };
+
+  const addToCart=(item)=>{
+    const qty=parseFloat(item.Qty)||0;
+    const price=parseFloat(item.Price)||0;
+    if(!qty||!price){showToast('Enter quantity and price','error');return}
+    const extTotal=qty*price;
+    const newItem={...item,id:Date.now(),extTotal,unitPrice:calcUnitPrice({...item,Price:extTotal})};
+    setCart([...cart,newItem]);
+    setQuickAdd(null);
+    showToast(`Added ${item.ItemName}!`);
+  };
+
+  const defaultIcons={'Meat':'🥩','Seafood':'🦐','Vegetables':'🥬','Dairy':'🥛','Dry Goods':'🌾','Spices':'🌶️','Beverages':'🥤','Frozen':'🧊','Poultry':'🍗','Pork':'🐷','Beef':'🐄','Supplies':'📦','Noodles':'🍜','Sauce':'🥫','Oil':'🫒','Eggs':'🥚','Rice':'🍚','Cleaning':'🧹'};
+  
+  const getCategoryIcon=(cat)=>{
+    if(settings.CategoryIcons){
+      const customIcons={};
+      settings.CategoryIcons.split(',').forEach(pair=>{const[name,icon]=pair.split(':');if(name&&icon)customIcons[name.trim()]=icon.trim()});
+      if(customIcons[cat])return customIcons[cat];
+    }
+    return defaultIcons[cat]||'📦';
+  };
+
+  const addNewIngredient=async()=>{
+    if(!newIng.Name){showToast('Enter ingredient name','error');return}
+    if(!newIng.Category){showToast('Select category','error');return}
+    setSaving(true);
+    try{
+      await api(apiUrl,'addIngredient',{data:newIng});
+      showToast(`Added ${newIng.Name}!`);
+      setShowNewIngredient(false);
+      setNewIng({Name:'',Category:'',Unit:'g',ContainerType:'',ContainerSize:'',ContainerUnit:'kg'});
+      loadAll();
+    }catch(e){showToast(e.message,'error')}
+    finally{setSaving(false)}
+  };
+
+  return(
+    <div className="space-y-4 fade">
+      <div className="flex gap-2 mb-4">
+        <div className="relative flex-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} className="inp pl-10" placeholder="Search ingredients..."/>
+        </div>
+        <button onClick={loadAll} className="btn btn-s px-3">🔄</button>
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4">
+        {categories.map(c=><button key={c} onClick={()=>setCategory(c)} className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition ${category===c?'bg-red-600 text-white':'bg-white text-gray-600 shadow'}`}>{c!=='All'&&<span className="mr-1">{getCategoryIcon(c)}</span>}{c}</button>)}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {filtered.map(ing=>{
+          const recent=getRecentPrice(ing.MasterSKU);
+          const inCart=cart.filter(c=>c.MasterSKU===ing.MasterSKU).length;
+          return(
+            <div key={ing.MasterSKU} className="card p-3 relative">
+              {inCart>0&&<span className="absolute top-2 right-2 bg-green-500 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{inCart}</span>}
+              <div className="text-3xl text-center mb-2">{getCategoryIcon(ing.Category)}</div>
+              <h3 className="font-semibold text-sm text-gray-800 truncate">{ing.Name}</h3>
+              <p className="text-xs text-gray-400">{ing.Category}</p>
+              {recent&&<p className="text-xs text-green-600 mt-1">Last: ₱{recent.price?.toFixed(4)}/{ing.Unit}</p>}
+              {ing.ContainerType&&<p className="text-xs text-gray-500 mt-1">📦 {ing.ContainerType} {ing.ContainerSize}{ing.ContainerUnit}</p>}
+              <button onClick={()=>setQuickAdd({...ing,ItemName:ing.Name,BaseUnit:ing.Unit,Qty:'',Price:'',ContainerType:ing.ContainerType||'',ContainerSize:ing.ContainerSize||'',ContainerUnit:ing.ContainerUnit||'kg'})} className="w-full mt-3 bg-red-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-red-700 transition">+ Add</button>
+            </div>
+          );
+        })}
+      </div>
+
+      {filtered.length===0&&<div className="text-center py-8"><p className="text-gray-400 mb-4">No ingredients found</p><button onClick={()=>setShowNewIngredient(true)} className="btn btn-p">+ Add New Ingredient</button></div>}
+      
+      {filtered.length>0&&<button onClick={()=>setShowNewIngredient(true)} className="fixed bottom-24 right-4 w-14 h-14 bg-green-600 text-white rounded-full shadow-lg text-2xl flex items-center justify-center z-30 hover:bg-green-700">+</button>}
+
+      {showNewIngredient&&<div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center" onClick={()=>setShowNewIngredient(false)}>
+        <div className="bg-white w-full max-w-lg rounded-t-3xl p-4 slide-up" onClick={e=>e.stopPropagation()}>
+          <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"/>
+          <h3 className="font-bold text-lg text-center mb-4">➕ Add New Ingredient</h3>
+          <div className="space-y-3 mb-4">
+            <div><label className="text-xs text-gray-500">Ingredient Name *</label><input value={newIng.Name} onChange={e=>setNewIng({...newIng,Name:e.target.value})} className="inp" placeholder="e.g. Chicken Breast" autoFocus/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs text-gray-500">Category *</label><select value={newIng.Category} onChange={e=>setNewIng({...newIng,Category:e.target.value})} className="inp"><option value="">Select...</option>{allCategories.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Base Unit</label><select value={newIng.Unit} onChange={e=>setNewIng({...newIng,Unit:e.target.value})} className="inp"><option value="g">g (grams)</option><option value="ml">ml (milliliters)</option><option value="pcs">pcs (pieces)</option></select></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className="text-xs text-gray-500">Container</label><select value={newIng.ContainerType} onChange={e=>setNewIng({...newIng,ContainerType:e.target.value})} className="inp text-sm"><option value="">(None)</option>{containerTypes.map(c=><option key={c}>{c.trim()}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Size</label><input type="number" value={newIng.ContainerSize} onChange={e=>setNewIng({...newIng,ContainerSize:e.target.value})} className="inp text-center" placeholder="0"/></div>
+              <div><label className="text-xs text-gray-500">Unit</label><select value={newIng.ContainerUnit} onChange={e=>setNewIng({...newIng,ContainerUnit:e.target.value})} className="inp text-sm">{containerUnits.map(u=><option key={u}>{u.trim()}</option>)}</select></div>
+            </div>
+          </div>
+          <div className="flex gap-3"><button onClick={()=>setShowNewIngredient(false)} className="flex-1 btn btn-s">Cancel</button><button onClick={addNewIngredient} disabled={saving} className="flex-1 btn btn-p">{saving?'Saving...':'✅ Add'}</button></div>
+        </div>
+      </div>}
+
+      {quickAdd&&<div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center" onClick={()=>setQuickAdd(null)}>
+        <div className="bg-white w-full max-w-lg rounded-t-3xl p-4 slide-up" onClick={e=>e.stopPropagation()}>
+          <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"/>
+          <h3 className="font-bold text-lg text-center mb-4">{quickAdd.ItemName}</h3>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div><label className="text-xs text-gray-500">How Many?</label><input type="number" value={quickAdd.Qty} onChange={e=>setQuickAdd({...quickAdd,Qty:e.target.value})} className="inp text-center text-xl font-bold" placeholder="0" autoFocus/></div>
+            <div><label className="text-xs text-gray-500">Container Type</label><select value={quickAdd.ContainerType} onChange={e=>setQuickAdd({...quickAdd,ContainerType:e.target.value})} className="inp"><option value="">(None)</option>{containerTypes.map(c=><option key={c}>{c.trim()}</option>)}</select></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div><label className="text-xs text-gray-500">Container Size</label><input type="number" value={quickAdd.ContainerSize} onChange={e=>setQuickAdd({...quickAdd,ContainerSize:e.target.value})} className="inp text-center" placeholder="0" step="0.1"/></div>
+            <div><label className="text-xs text-gray-500">Size Unit</label><select value={quickAdd.ContainerUnit} onChange={e=>setQuickAdd({...quickAdd,ContainerUnit:e.target.value})} className="inp">{containerUnits.map(u=><option key={u}>{u.trim()}</option>)}</select></div>
+          </div>
+          <div className="mb-4"><label className="text-xs text-gray-500">Price per {quickAdd.ContainerType||'Unit'}</label><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xl">₱</span><input type="number" value={quickAdd.Price} onChange={e=>setQuickAdd({...quickAdd,Price:e.target.value})} className="inp pl-10 text-2xl font-bold text-center" placeholder="0.00" step="0.01"/></div></div>
+          {quickAdd.Qty&&quickAdd.Price&&<div className="bg-green-50 rounded-xl p-3 mb-4 text-center"><p className="text-green-800 font-bold text-xl">{fmt(parseFloat(quickAdd.Qty)*parseFloat(quickAdd.Price))}</p><p className="text-xs text-green-600">{quickAdd.Qty} × ₱{parseFloat(quickAdd.Price).toLocaleString()}</p></div>}
+          <div className="flex gap-3"><button onClick={()=>setQuickAdd(null)} className="flex-1 btn btn-s">Cancel</button><button onClick={()=>addToCart(quickAdd)} className="flex-1 btn btn-p">🛒 Add to Cart</button></div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function ExpenseShop({settings,expenseCart,setExpenseCart,showToast}){
+  const categories=(settings.ExpenseCategories||'Utilities,Rent,Salaries,Supplies,Transportation,Repairs,Marketing,Miscellaneous').split(',');
+  const[quickAdd,setQuickAdd]=useState(null);
+
+  const defaultExpenseIcons={'Utilities':'💡','Rent':'🏠','Salaries':'👥','Supplies':'📦','Transportation':'🚗','Repairs':'🔧','Marketing':'📢','Miscellaneous':'📋','Food':'🍽️','Cleaning':'🧹','Equipment':'⚙️','Fuel':'⛽','Internet':'🌐','Water':'💧','Electric':'⚡'};
+  
+  const getCategoryIcon=(cat)=>{
+    if(settings.ExpenseIcons){
+      const customIcons={};
+      settings.ExpenseIcons.split(',').forEach(pair=>{const[name,icon]=pair.split(':');if(name&&icon)customIcons[name.trim()]=icon.trim()});
+      if(customIcons[cat])return customIcons[cat];
+    }
+    return defaultExpenseIcons[cat]||'💰';
+  };
+
+  const addToCart=(item)=>{
+    if(!item.Amount){showToast('Enter amount','error');return}
+    setExpenseCart([...expenseCart,{...item,id:Date.now()}]);
+    setQuickAdd(null);
+    showToast(`Added ${item.Category} expense!`);
+  };
+
+  return(
+    <div className="space-y-4 fade">
+      <div className="text-center py-4"><span className="text-4xl">💰</span><h2 className="font-bold text-lg mt-2">Add Expenses</h2><p className="text-gray-500 text-sm">Tap a category</p></div>
+      <div className="grid grid-cols-3 gap-3">
+        {categories.map(cat=><button key={cat} onClick={()=>setQuickAdd({Category:cat.trim(),Amount:'',Description:''})} className="card p-4 text-center hover:shadow-lg transition"><span className="text-3xl">{getCategoryIcon(cat.trim())}</span><p className="text-sm font-medium mt-2 text-gray-700">{cat.trim()}</p></button>)}
+      </div>
+      {quickAdd&&<div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center" onClick={()=>setQuickAdd(null)}>
+        <div className="bg-white w-full max-w-lg rounded-t-3xl p-4 slide-up" onClick={e=>e.stopPropagation()}>
+          <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto mb-4"/>
+          <div className="text-center mb-4"><span className="text-4xl">{getCategoryIcon(quickAdd.Category)}</span><h3 className="font-bold text-lg mt-2">{quickAdd.Category}</h3></div>
+          <div className="mb-4"><label className="text-xs text-gray-500">Amount</label><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xl">₱</span><input type="number" value={quickAdd.Amount} onChange={e=>setQuickAdd({...quickAdd,Amount:e.target.value})} className="inp pl-10 text-2xl font-bold text-center" placeholder="0.00" step="0.01" autoFocus/></div></div>
+          <div className="mb-4"><label className="text-xs text-gray-500">Description</label><input value={quickAdd.Description} onChange={e=>setQuickAdd({...quickAdd,Description:e.target.value})} className="inp" placeholder="What was this expense for?"/></div>
+          <div className="flex gap-3"><button onClick={()=>setQuickAdd(null)} className="flex-1 btn btn-s">Cancel</button><button onClick={()=>addToCart(quickAdd)} className="flex-1 btn btn-amber">🧾 Add Expense</button></div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function PurchaseCartModal({cart,setCart,cartTotal,onClose,settings,apiUrl,showToast,loadAll}){
+  const[saving,setSaving]=useState(false);
+  const[uploading,setUploading]=useState(false);
+  const[checkout,setCheckout]=useState(false);
+  const[header,setHeader]=useState({PurchaseDate:new Date().toISOString().split('T')[0],Supplier:'',PO:'',PayMethod:'Cash',InvoicePhoto:''});
+  const[photoPreview,setPhotoPreview]=useState(null);
+
+  const payMethods=(settings.PaymentMethods||'Cash,GCash,Maya,Bank Transfer,Credit').split(',');
+  const removeItem=(id)=>setCart(cart.filter(c=>c.id!==id));
+  const clearCart=()=>{if(confirm('Clear entire cart?'))setCart([])};
+
+  const handlePhoto=async(e)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=(ev)=>setPhotoPreview(ev.target.result);reader.readAsDataURL(file)};
+
+  const uploadPhoto=async(base64)=>{
+    setUploading(true);
+    try{const filename=`INV_${BRANCH_CODE}_${Date.now()}.jpg`;const result=await api(apiUrl,'uploadInvoicePhoto',{base64,filename,branchCode:BRANCH_CODE});return result.viewUrl||result.url;}
+    catch(e){showToast('Photo upload failed','error');return null}
+    finally{setUploading(false)}
+  };
+
+  const submitOrder=async()=>{
+    if(cart.length===0){showToast('Cart is empty','error');return}
+    setSaving(true);
+    try{
+      let invoiceUrl=header.InvoicePhoto;
+      if(photoPreview&&!invoiceUrl)invoiceUrl=await uploadPhoto(photoPreview);
+      await api(apiUrl,'addPurchases',{data:cart.map(p=>({ItemName:p.ItemName,MasterSKU:p.MasterSKU,BaseUnit:p.BaseUnit,Description:p.Description||'',ContainerType:p.ContainerType,ContainerSize:p.ContainerSize,ContainerUnit:p.ContainerUnit,Qty:p.Qty,Price:p.extTotal,Notes:'',Branch:BRANCH_NAME,BranchCode:BRANCH_CODE,PurchaseDate:header.PurchaseDate,Supplier:header.Supplier,PO:header.PO,InvoicePhoto:invoiceUrl||''}))});
+      showToast(`Saved ${cart.length} items!`);
+      setCart([]);setHeader({PurchaseDate:new Date().toISOString().split('T')[0],Supplier:'',PO:'',PayMethod:'Cash',InvoicePhoto:''});setPhotoPreview(null);setCheckout(false);onClose();loadAll();
+    }catch(e){showToast(e.message,'error')}
+    finally{setSaving(false)}
+  };
+
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-white w-full max-w-lg h-[90vh] rounded-t-3xl flex flex-col slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b flex justify-between items-center bg-gradient-to-r from-red-700 to-red-800 text-white rounded-t-3xl">
+          <div><h3 className="font-bold text-lg">🛒 Purchase Cart</h3><p className="text-sm text-red-200">{cart.length} items</p></div>
+          <button onClick={onClose} className="text-2xl text-white/80">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {cart.length===0?<div className="text-center py-12"><span className="text-6xl">🛒</span><p className="text-gray-400 mt-4">Your cart is empty</p><button onClick={onClose} className="btn btn-p mt-4">Start Shopping</button></div>:
+          checkout?<div className="p-4 space-y-4">
+            <h4 className="font-bold text-gray-700">📝 Order Details</h4>
+            <div><label className="text-xs text-gray-500">Purchase Date</label><input type="date" value={header.PurchaseDate} onChange={e=>setHeader({...header,PurchaseDate:e.target.value})} className="inp"/></div>
+            <div><label className="text-xs text-gray-500">Supplier Name</label><input value={header.Supplier} onChange={e=>setHeader({...header,Supplier:e.target.value})} className="inp" placeholder="Where did you buy from?"/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs text-gray-500">P.O. / Invoice #</label><input value={header.PO} onChange={e=>setHeader({...header,PO:e.target.value})} className="inp" placeholder="Reference #"/></div>
+              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m}>{m.trim()}</option>)}</select></div>
+            </div>
+            <div><label className="text-xs text-gray-500">📷 Invoice Photo</label>
+              {photoPreview?<div className="relative mt-1"><img src={photoPreview} alt="Invoice" className="w-full h-32 object-cover rounded-xl"/><button onClick={()=>setPhotoPreview(null)} className="absolute top-2 right-2 bg-black/50 text-white w-8 h-8 rounded-full">✕</button></div>:
+              <label className="block border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-red-400 mt-1"><input type="file" accept="image/*" capture="environment" onChange={handlePhoto} className="hidden"/><span className="text-3xl">📷</span><p className="text-sm text-gray-500 mt-2">Tap to capture</p></label>}
+            </div>
+            <div className="bg-gray-100 rounded-xl p-3"><p className="text-sm text-gray-600 mb-2">Order Summary:</p>{cart.map((item,i)=><div key={i} className="flex justify-between text-sm py-1"><span className="truncate flex-1 mr-2">{item.ItemName} × {item.Qty}</span><span className="font-medium">{fmt(item.extTotal)}</span></div>)}<div className="border-t mt-2 pt-2 flex justify-between font-bold"><span>Total</span><span className="text-red-600">{fmt(cartTotal)}</span></div></div>
+          </div>:
+          <div className="p-4 space-y-3">{cart.map((item)=><div key={item.id} className="bg-gray-50 rounded-xl p-3 flex items-center gap-3"><div className="flex-1"><p className="font-medium">{item.ItemName}</p><p className="text-xs text-gray-500">{item.Qty} {item.ContainerType||'units'} × ₱{parseFloat(item.Price||0).toLocaleString()}</p></div><p className="font-bold text-red-600">{fmt(item.extTotal)}</p><button onClick={()=>removeItem(item.id)} className="text-gray-400 hover:text-red-500">✕</button></div>)}<button onClick={clearCart} className="w-full text-sm text-gray-400 py-2">Clear Cart</button></div>}
+        </div>
+        {cart.length>0&&<div className="p-4 border-t bg-white">
+          <div className="flex justify-between items-center mb-3"><span className="text-gray-600">Total ({cart.length} items)</span><span className="text-2xl font-bold text-red-600">{fmt(cartTotal)}</span></div>
+          {checkout?<div className="flex gap-3"><button onClick={()=>setCheckout(false)} className="flex-1 btn btn-s">← Back</button><button onClick={submitOrder} disabled={saving||uploading} className="flex-1 btn btn-p">{saving?'Saving...':uploading?'Uploading...':'✅ Submit'}</button></div>:<button onClick={()=>setCheckout(true)} className="w-full btn btn-p text-lg py-4">Proceed to Checkout →</button>}
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+function ExpenseCartModal({cart,setCart,cartTotal,onClose,settings,apiUrl,showToast,loadAll}){
+  const[saving,setSaving]=useState(false);
+  const[uploading,setUploading]=useState(false);
+  const[checkout,setCheckout]=useState(false);
+  const[header,setHeader]=useState({Date:new Date().toISOString().split('T')[0],Payee:'',PayMethod:'Cash',ReceiptPhoto:''});
+  const[photoPreview,setPhotoPreview]=useState(null);
+
+  const payMethods=(settings.PaymentMethods||'Cash,GCash,Maya,Bank Transfer').split(',');
+  const removeItem=(id)=>setCart(cart.filter(c=>c.id!==id));
+  const clearCart=()=>{if(confirm('Clear entire cart?'))setCart([])};
+
+  const handlePhoto=async(e)=>{const file=e.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=(ev)=>setPhotoPreview(ev.target.result);reader.readAsDataURL(file)};
+
+  const uploadPhoto=async(base64)=>{
+    setUploading(true);
+    try{const filename=`RCP_${BRANCH_CODE}_${Date.now()}.jpg`;const result=await api(apiUrl,'uploadReceiptPhoto',{base64,filename,branchCode:BRANCH_CODE});return result.viewUrl||result.url;}
+    catch(e){showToast('Photo upload failed','error');return null}
+    finally{setUploading(false)}
+  };
+
+  const submitOrder=async()=>{
+    if(cart.length===0){showToast('Cart is empty','error');return}
+    setSaving(true);
+    try{
+      let receiptUrl=header.ReceiptPhoto;
+      if(photoPreview&&!receiptUrl)receiptUrl=await uploadPhoto(photoPreview);
+      await api(apiUrl,'addExpenses',{data:cart.map(e=>({Category:e.Category,Amount:e.Amount,Description:e.Description||'',Branch:BRANCH_NAME,BranchCode:BRANCH_CODE,Date:header.Date,Payee:header.Payee,PayMethod:header.PayMethod,ReceiptPhoto:receiptUrl||''}))});
+      showToast(`Saved ${cart.length} expenses!`);
+      setCart([]);setHeader({Date:new Date().toISOString().split('T')[0],Payee:'',PayMethod:'Cash',ReceiptPhoto:''});setPhotoPreview(null);setCheckout(false);onClose();loadAll();
+    }catch(e){showToast(e.message,'error')}
+    finally{setSaving(false)}
+  };
+
+  const defaultExpenseIcons={'Utilities':'💡','Rent':'🏠','Salaries':'👥','Supplies':'📦','Transportation':'🚗','Repairs':'🔧','Marketing':'📢','Miscellaneous':'📋'};
+  const getCategoryIcon=(cat)=>{if(settings.ExpenseIcons){const ci={};settings.ExpenseIcons.split(',').forEach(p=>{const[n,i]=p.split(':');if(n&&i)ci[n.trim()]=i.trim()});if(ci[cat])return ci[cat]}return defaultExpenseIcons[cat]||'💰'};
+
+  return(
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end justify-center" onClick={onClose}>
+      <div className="bg-white w-full max-w-lg h-[90vh] rounded-t-3xl flex flex-col slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="p-4 border-b flex justify-between items-center bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-t-3xl">
+          <div><h3 className="font-bold text-lg">🧾 Expense Cart</h3><p className="text-sm text-amber-200">{cart.length} items</p></div>
+          <button onClick={onClose} className="text-2xl text-white/80">✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {cart.length===0?<div className="text-center py-12"><span className="text-6xl">🧾</span><p className="text-gray-400 mt-4">No expenses yet</p><button onClick={onClose} className="btn btn-amber mt-4">Add Expenses</button></div>:
+          checkout?<div className="p-4 space-y-4">
+            <h4 className="font-bold text-gray-700">📝 Details</h4>
+            <div><label className="text-xs text-gray-500">Date</label><input type="date" value={header.Date} onChange={e=>setHeader({...header,Date:e.target.value})} className="inp"/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs text-gray-500">Payee</label><input value={header.Payee} onChange={e=>setHeader({...header,Payee:e.target.value})} className="inp" placeholder="Who was paid?"/></div>
+              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m}>{m.trim()}</option>)}</select></div>
+            </div>
+            <div><label className="text-xs text-gray-500">📷 Receipt Photo</label>
+              {photoPreview?<div className="relative mt-1"><img src={photoPreview} alt="Receipt" className="w-full h-32 object-cover rounded-xl"/><button onClick={()=>setPhotoPreview(null)} className="absolute top-2 right-2 bg-black/50 text-white w-8 h-8 rounded-full">✕</button></div>:
+              <label className="block border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-amber-400 mt-1"><input type="file" accept="image/*" capture="environment" onChange={handlePhoto} className="hidden"/><span className="text-3xl">📷</span><p className="text-sm text-gray-500 mt-2">Tap to capture</p></label>}
+            </div>
+            <div className="bg-amber-50 rounded-xl p-3"><p className="text-sm text-gray-600 mb-2">Summary:</p>{cart.map((item,i)=><div key={i} className="flex justify-between text-sm py-1"><span>{getCategoryIcon(item.Category)} {item.Category}</span><span className="font-medium">{fmt(item.Amount)}</span></div>)}<div className="border-t mt-2 pt-2 flex justify-between font-bold"><span>Total</span><span className="text-amber-600">{fmt(cartTotal)}</span></div></div>
+          </div>:
+          <div className="p-4 space-y-3">{cart.map((item)=><div key={item.id} className="bg-amber-50 rounded-xl p-3 flex items-center gap-3"><span className="text-2xl">{getCategoryIcon(item.Category)}</span><div className="flex-1"><p className="font-medium">{item.Category}</p><p className="text-xs text-gray-500">{item.Description||'No description'}</p></div><p className="font-bold text-amber-600">{fmt(item.Amount)}</p><button onClick={()=>removeItem(item.id)} className="text-gray-400 hover:text-red-500">✕</button></div>)}<button onClick={clearCart} className="w-full text-sm text-gray-400 py-2">Clear All</button></div>}
+        </div>
+        {cart.length>0&&<div className="p-4 border-t bg-white">
+          <div className="flex justify-between items-center mb-3"><span className="text-gray-600">Total ({cart.length} items)</span><span className="text-2xl font-bold text-amber-600">{fmt(cartTotal)}</span></div>
+          {checkout?<div className="flex gap-3"><button onClick={()=>setCheckout(false)} className="flex-1 btn btn-s">← Back</button><button onClick={submitOrder} disabled={saving||uploading} className="flex-1 btn btn-amber">{saving?'Saving...':uploading?'Uploading...':'✅ Submit'}</button></div>:<button onClick={()=>setCheckout(true)} className="w-full btn btn-amber text-lg py-4">Checkout →</button>}
+        </div>}
       </div>
     </div>
   );
