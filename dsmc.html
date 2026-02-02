@@ -102,6 +102,12 @@ function App(){
   const[expenseCart,setExpenseCart]=useState([]);
   const[showCart,setShowCart]=useState(false);
   const[showExpenseCart,setShowExpenseCart]=useState(false);
+  
+  // AI Scanner states
+  const[showScanner,setShowScanner]=useState(false);
+  const[scanning,setScanning]=useState(false);
+  const[scanResult,setScanResult]=useState(null);
+  const[scanPhoto,setScanPhoto]=useState(null);
 
   const showToast=(msg,type='success')=>{setToast({msg,type});setTimeout(()=>setToast(null),3000)};
 
@@ -116,6 +122,110 @@ function App(){
   const cartCount=cart.length;
   const expenseTotal=expenseCart.reduce((s,c)=>s+(parseFloat(c.Amount)||0),0);
   const expenseCount=expenseCart.length;
+
+  // AI Scanner functions
+  const handleScanPhoto=async(e)=>{
+    const file=e.target.files?.[0];
+    if(!file)return;
+    
+    const reader=new FileReader();
+    reader.onload=async(ev)=>{
+      const base64=ev.target.result;
+      setScanPhoto(base64);
+      setScanning(true);
+      setScanResult(null);
+      
+      try{
+        const r=await api(apiUrl,'scanInvoice',{
+          image:base64,
+          ingredients:JSON.stringify(ingredients)
+        });
+        
+        if(r.error){
+          showToast(r.error,'error');
+          setScanResult(null);
+        }else if(r.data){
+          // Enhance items with ingredient data
+          const enhanced=r.data.items?.map(item=>({
+            ...item,
+            selectedSKU:item.matchedSKU||'',
+            selectedName:item.matchedIngredient||item.itemName||'',
+            confirmed:item.confidence>=0.9
+          }))||[];
+          setScanResult({...r.data,items:enhanced});
+        }
+      }catch(err){
+        showToast('Scan failed: '+err.message,'error');
+      }finally{
+        setScanning(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  
+  const updateScanItem=(idx,field,value)=>{
+    setScanResult(prev=>{
+      const items=[...prev.items];
+      items[idx]={...items[idx],[field]:value};
+      
+      // If selecting ingredient, update related fields
+      if(field==='selectedSKU'&&value){
+        const ing=ingredients.find(i=>String(i.MasterSKU)===String(value));
+        if(ing){
+          items[idx].selectedName=ing.Name;
+          items[idx].matchedIngredient=ing.Name;
+          items[idx].unit=items[idx].unit||ing.Unit;
+        }
+      }
+      return{...prev,items};
+    });
+  };
+  
+  const addScannedToCart=async()=>{
+    if(!scanResult?.items?.length)return;
+    
+    const validItems=scanResult.items.filter(item=>item.selectedSKU&&item.qty&&item.price);
+    if(validItems.length===0){
+      showToast('No valid items to add','error');
+      return;
+    }
+    
+    // Save aliases for unmatched items
+    for(const item of validItems){
+      if(item.rawText&&item.selectedSKU&&!item.aliasMatch){
+        try{
+          await api(apiUrl,'saveItemAlias',{
+            alias:item.rawText,
+            masterSKU:item.selectedSKU,
+            ingredientName:item.selectedName
+          });
+        }catch(e){console.log('Alias save failed',e)}
+      }
+    }
+    
+    // Add to cart
+    const newItems=validItems.map(item=>{
+      const ing=ingredients.find(i=>String(i.MasterSKU)===String(item.selectedSKU))||{};
+      return{
+        MasterSKU:item.selectedSKU,
+        ItemName:item.selectedName||item.itemName,
+        Qty:parseFloat(item.qty)||1,
+        ContainerType:ing.ContainerType||'',
+        ContainerSize:ing.ContainerSize||item.qty,
+        ContainerUnit:ing.ContainerUnit||item.unit||'kg',
+        Price:parseFloat(item.unitPrice||item.price)||0,
+        extTotal:parseFloat(item.price)||0,
+        Unit:ing.Unit||'g',
+        Category:ing.Category||'Other'
+      };
+    });
+    
+    setCart(prev=>[...prev,...newItems]);
+    showToast(`Added ${newItems.length} items to cart!`);
+    setShowScanner(false);
+    setScanResult(null);
+    setScanPhoto(null);
+  };
 
   // Device identification
   const getDeviceID=()=>{
@@ -393,6 +503,13 @@ function App(){
               {uiMode==='shop'?'🛒':'📝'}<span className="text-xs">{uiMode==='shop'?'Shop':'Form'}</span>
             </button>
             
+            {/* AI Scan Button (shopping mode purchases) */}
+            {uiMode==='shop'&&tab==='purchases'&&(
+              <button onClick={()=>setShowScanner(true)} className="px-3 py-1.5 rounded-lg bg-green-500/80 text-sm font-medium hover:bg-green-500 flex items-center gap-1" title="AI Invoice Scanner">
+                <span>📷</span><span className="text-xs">Scan</span>
+              </button>
+            )}
+            
             {/* Cart Button (shopping mode) */}
             {uiMode==='shop'&&tab==='purchases'&&(
               <button onClick={()=>setShowCart(true)} className="relative px-3 py-1 rounded-lg bg-white/20 flex items-center gap-1 hover:bg-white/30">
@@ -437,6 +554,121 @@ function App(){
       {/* Cart Modals (shopping mode) */}
       {showCart&&<PurchaseCartModal cart={cart} setCart={setCart} cartTotal={cartTotal} onClose={()=>setShowCart(false)} settings={settings} apiUrl={apiUrl} showToast={showToast} loadAll={()=>{loadAll();loadTx(viewDays)}}/>}
       {showExpenseCart&&<ExpenseCartModal cart={expenseCart} setCart={setExpenseCart} cartTotal={expenseTotal} onClose={()=>setShowExpenseCart(false)} settings={settings} apiUrl={apiUrl} showToast={showToast} loadAll={()=>{loadAll();loadTx(viewDays)}}/>}
+      
+      {/* AI Invoice Scanner Modal */}
+      {showScanner&&<div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-2" onClick={()=>{setShowScanner(false);setScanResult(null);setScanPhoto(null)}}>
+        <div className="bg-white w-full max-w-lg rounded-2xl max-h-[95vh] overflow-hidden flex flex-col" onClick={e=>e.stopPropagation()}>
+          <div className="p-4 border-b bg-gradient-to-r from-green-600 to-emerald-600 text-white">
+            <div className="flex justify-between items-center">
+              <h3 className="font-bold text-lg">📷 AI Invoice Scanner</h3>
+              <button onClick={()=>{setShowScanner(false);setScanResult(null);setScanPhoto(null)}} className="text-2xl">✕</button>
+            </div>
+            <p className="text-xs opacity-80 mt-1">Take a photo of receipt/invoice to auto-extract items</p>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto p-4">
+            {!scanPhoto&&!scanning&&!scanResult&&(
+              <label className="block border-2 border-dashed border-green-300 rounded-2xl p-8 text-center cursor-pointer hover:border-green-500 hover:bg-green-50 transition">
+                <input type="file" accept="image/*" capture="environment" onChange={handleScanPhoto} className="hidden"/>
+                <span className="text-6xl block mb-4">📸</span>
+                <p className="text-lg font-medium text-gray-700">Tap to capture invoice</p>
+                <p className="text-sm text-gray-500 mt-2">Works with printed & handwritten receipts</p>
+              </label>
+            )}
+            
+            {scanning&&(
+              <div className="text-center py-12">
+                <div className="w-16 h-16 border-4 border-green-200 border-t-green-600 rounded-full spin mx-auto mb-4"/>
+                <p className="text-lg font-medium text-gray-700">🤖 AI is reading your invoice...</p>
+                <p className="text-sm text-gray-500 mt-2">This may take a few seconds</p>
+                {scanPhoto&&<img src={scanPhoto} alt="Scanning..." className="w-32 h-32 object-cover rounded-xl mx-auto mt-4 opacity-50"/>}
+              </div>
+            )}
+            
+            {scanResult&&(
+              <div className="space-y-4">
+                {/* Scan Preview */}
+                <div className="flex gap-3">
+                  {scanPhoto&&<img src={scanPhoto} alt="Invoice" className="w-20 h-20 object-cover rounded-xl"/>}
+                  <div className="flex-1">
+                    {scanResult.supplier&&<p className="font-medium text-gray-800">🏪 {scanResult.supplier}</p>}
+                    {scanResult.date&&<p className="text-sm text-gray-500">📅 {scanResult.date}</p>}
+                    <p className="text-sm text-green-600 font-medium">{scanResult.items?.length||0} items found</p>
+                    {scanResult.notes&&<p className="text-xs text-amber-600 mt-1">⚠️ {scanResult.notes}</p>}
+                  </div>
+                  <button onClick={()=>{setScanResult(null);setScanPhoto(null)}} className="text-sm text-blue-600">↺ Rescan</button>
+                </div>
+                
+                {/* Items List */}
+                <div className="space-y-3">
+                  {scanResult.items?.map((item,idx)=>(
+                    <div key={idx} className={`p-3 rounded-xl border-2 ${item.selectedSKU?'border-green-200 bg-green-50':'border-amber-200 bg-amber-50'}`}>
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className="text-xs text-gray-500">Read: "{item.rawText}"</p>
+                          <p className="font-medium">{item.itemName||item.rawText}</p>
+                        </div>
+                        <span className={`text-xs px-2 py-1 rounded-full ${item.confidence>=0.9?'bg-green-200 text-green-800':item.confidence>=0.7?'bg-yellow-200 text-yellow-800':'bg-red-200 text-red-800'}`}>
+                          {Math.round((item.confidence||0)*100)}%
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-2 mb-2">
+                        <div>
+                          <label className="text-xs text-gray-500">Qty</label>
+                          <input type="number" value={item.qty||''} onChange={e=>updateScanItem(idx,'qty',e.target.value)} className="inp text-sm text-center" placeholder="0"/>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">Unit</label>
+                          <input value={item.unit||''} onChange={e=>updateScanItem(idx,'unit',e.target.value)} className="inp text-sm text-center" placeholder="kg"/>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500">Total ₱</label>
+                          <input type="number" value={item.price||''} onChange={e=>updateScanItem(idx,'price',e.target.value)} className="inp text-sm text-center" placeholder="0"/>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="text-xs text-gray-500">Match to Ingredient {item.aliasMatch&&<span className="text-green-600">(remembered)</span>}</label>
+                        <select value={item.selectedSKU||''} onChange={e=>{
+                          const ing=ingredients.find(i=>String(i.MasterSKU)===e.target.value);
+                          updateScanItem(idx,'selectedSKU',e.target.value);
+                          if(ing)updateScanItem(idx,'selectedName',ing.Name);
+                        }} className={`inp text-sm ${item.selectedSKU?'border-green-400':'border-amber-400'}`}>
+                          <option value="">-- Select Ingredient --</option>
+                          {ingredients.sort((a,b)=>a.Name.localeCompare(b.Name)).map(ing=>(
+                            <option key={ing.MasterSKU} value={ing.MasterSKU}>{ing.Name} ({ing.Unit})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                {/* Total */}
+                {scanResult.total&&(
+                  <div className="p-3 bg-gray-100 rounded-xl text-center">
+                    <p className="text-sm text-gray-500">Invoice Total</p>
+                    <p className="text-2xl font-bold text-gray-800">₱{parseFloat(scanResult.total).toLocaleString()}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          
+          {/* Footer Actions */}
+          {scanResult&&(
+            <div className="p-4 border-t bg-gray-50">
+              <div className="flex gap-3">
+                <button onClick={()=>{setScanResult(null);setScanPhoto(null)}} className="flex-1 btn btn-s">Cancel</button>
+                <button onClick={addScannedToCart} className="flex-1 btn btn-p">
+                  🛒 Add {scanResult.items?.filter(i=>i.selectedSKU&&i.qty&&i.price).length||0} Items to Cart
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>}
 
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex z-40">
         {[
@@ -1479,7 +1711,7 @@ function Ingredients({apiUrl,ingredients,ingCats,settings,showToast,loadAll}){
         <div><label className="lbl">Name *</label><input value={form.Name} onChange={e=>setForm({...form,Name:e.target.value})} className="inp" placeholder="e.g., Chicken Breast"/></div>
         <div className="grid grid-cols-2 gap-3">
           <div><label className="lbl">Unit</label><select value={form.Unit} onChange={e=>setForm({...form,Unit:e.target.value})} className="inp">{units.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select></div>
-          <div><label className="lbl">Category</label><select value={form.Category} onChange={e=>setForm({...form,Category:e.target.value})} className="inp">{ingCats.map(c=><option key={c.Category}>{c.Category}</option>)}</select></div>
+          <div><label className="lbl">Category</label><select value={form.Category||''} onChange={e=>setForm({...form,Category:e.target.value})} className="inp">{ingCats.map(c=><option key={c.Category} value={c.Category}>{c.Category}</option>)}</select></div>
         </div>
         <button onClick={add} disabled={saving} className="btn btn-p w-full">
           {saving?'Saving...':'✓ Add Ingredient'}
@@ -1638,9 +1870,9 @@ function ShopView({ingredients,settings,purchases,cart,setCart,showToast,apiUrl,
               <div><label className="text-xs text-gray-500">Base Unit</label><select value={newIng.Unit} onChange={e=>setNewIng({...newIng,Unit:e.target.value})} className="inp"><option value="g">g (grams)</option><option value="ml">ml (milliliters)</option><option value="pcs">pcs (pieces)</option></select></div>
             </div>
             <div className="grid grid-cols-3 gap-3">
-              <div><label className="text-xs text-gray-500">Container</label><select value={newIng.ContainerType} onChange={e=>setNewIng({...newIng,ContainerType:e.target.value})} className="inp text-sm"><option value="">(None)</option>{containerTypes.map(c=><option key={c}>{c.trim()}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Container</label><select value={newIng.ContainerType||''} onChange={e=>setNewIng({...newIng,ContainerType:e.target.value})} className="inp text-sm"><option value="">(None)</option>{containerTypes.map(c=><option key={c} value={c.trim()}>{c.trim()}</option>)}</select></div>
               <div><label className="text-xs text-gray-500">Size</label><input type="number" value={newIng.ContainerSize} onChange={e=>setNewIng({...newIng,ContainerSize:e.target.value})} className="inp text-center" placeholder="0"/></div>
-              <div><label className="text-xs text-gray-500">Unit</label><select value={newIng.ContainerUnit} onChange={e=>setNewIng({...newIng,ContainerUnit:e.target.value})} className="inp text-sm">{containerUnits.map(u=><option key={u}>{u.trim()}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Unit</label><select value={newIng.ContainerUnit||'kg'} onChange={e=>setNewIng({...newIng,ContainerUnit:e.target.value})} className="inp text-sm">{containerUnits.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select></div>
             </div>
           </div>
           <div className="flex gap-3"><button onClick={()=>setShowNewIngredient(false)} className="flex-1 btn btn-s">Cancel</button><button onClick={addNewIngredient} disabled={saving} className="flex-1 btn btn-p">{saving?'Saving...':'✅ Add'}</button></div>
@@ -1653,11 +1885,11 @@ function ShopView({ingredients,settings,purchases,cart,setCart,showToast,apiUrl,
           <h3 className="font-bold text-lg text-center mb-4">{quickAdd.ItemName}</h3>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div><label className="text-xs text-gray-500">How Many?</label><input type="number" value={quickAdd.Qty} onChange={e=>setQuickAdd({...quickAdd,Qty:e.target.value})} className="inp text-center text-xl font-bold" placeholder="0" autoFocus/></div>
-            <div><label className="text-xs text-gray-500">Container Type</label><select value={quickAdd.ContainerType} onChange={e=>setQuickAdd({...quickAdd,ContainerType:e.target.value})} className="inp"><option value="">(None)</option>{containerTypes.map(c=><option key={c}>{c.trim()}</option>)}</select></div>
+            <div><label className="text-xs text-gray-500">Container Type</label><select value={quickAdd.ContainerType||''} onChange={e=>setQuickAdd({...quickAdd,ContainerType:e.target.value})} className="inp"><option value="">(None)</option>{containerTypes.map(c=><option key={c} value={c.trim()}>{c.trim()}</option>)}</select></div>
           </div>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div><label className="text-xs text-gray-500">Container Size</label><input type="number" value={quickAdd.ContainerSize} onChange={e=>setQuickAdd({...quickAdd,ContainerSize:e.target.value})} className="inp text-center" placeholder="0" step="0.1"/></div>
-            <div><label className="text-xs text-gray-500">Size Unit</label><select value={quickAdd.ContainerUnit} onChange={e=>setQuickAdd({...quickAdd,ContainerUnit:e.target.value})} className="inp">{containerUnits.map(u=><option key={u}>{u.trim()}</option>)}</select></div>
+            <div><label className="text-xs text-gray-500">Size Unit</label><select value={quickAdd.ContainerUnit||'kg'} onChange={e=>setQuickAdd({...quickAdd,ContainerUnit:e.target.value})} className="inp">{containerUnits.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}</select></div>
           </div>
           <div className="mb-4"><label className="text-xs text-gray-500">Price per {quickAdd.ContainerType||'Unit'}</label><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xl">₱</span><input type="number" value={quickAdd.Price} onChange={e=>setQuickAdd({...quickAdd,Price:e.target.value})} className="inp pl-10 text-2xl font-bold text-center" placeholder="0.00" step="0.01"/></div></div>
           {quickAdd.Qty&&quickAdd.Price&&<div className="bg-green-50 rounded-xl p-3 mb-4 text-center"><p className="text-green-800 font-bold text-xl">{fmt(parseFloat(quickAdd.Qty)*parseFloat(quickAdd.Price))}</p><p className="text-xs text-green-600">{quickAdd.Qty} × ₱{parseFloat(quickAdd.Price).toLocaleString()}</p></div>}
@@ -1757,7 +1989,7 @@ function PurchaseCartModal({cart,setCart,cartTotal,onClose,settings,apiUrl,showT
             <div><label className="text-xs text-gray-500">Supplier Name</label><input value={header.Supplier} onChange={e=>setHeader({...header,Supplier:e.target.value})} className="inp" placeholder="Where did you buy from?"/></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="text-xs text-gray-500">P.O. / Invoice #</label><input value={header.PO} onChange={e=>setHeader({...header,PO:e.target.value})} className="inp" placeholder="Reference #"/></div>
-              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m}>{m.trim()}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod||''} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m} value={m.trim()}>{m.trim()}</option>)}</select></div>
             </div>
             <div><label className="text-xs text-gray-500">📷 Invoice Photo</label>
               {photoPreview?<div className="relative mt-1"><img src={photoPreview} alt="Invoice" className="w-full h-32 object-cover rounded-xl"/><button onClick={()=>setPhotoPreview(null)} className="absolute top-2 right-2 bg-black/50 text-white w-8 h-8 rounded-full">✕</button></div>:
@@ -1826,7 +2058,7 @@ function ExpenseCartModal({cart,setCart,cartTotal,onClose,settings,apiUrl,showTo
             <div><label className="text-xs text-gray-500">Date</label><input type="date" value={header.Date} onChange={e=>setHeader({...header,Date:e.target.value})} className="inp"/></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="text-xs text-gray-500">Payee</label><input value={header.Payee} onChange={e=>setHeader({...header,Payee:e.target.value})} className="inp" placeholder="Who was paid?"/></div>
-              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m}>{m.trim()}</option>)}</select></div>
+              <div><label className="text-xs text-gray-500">Payment Method</label><select value={header.PayMethod||''} onChange={e=>setHeader({...header,PayMethod:e.target.value})} className="inp">{payMethods.map(m=><option key={m} value={m.trim()}>{m.trim()}</option>)}</select></div>
             </div>
             <div><label className="text-xs text-gray-500">📷 Receipt Photo</label>
               {photoPreview?<div className="relative mt-1"><img src={photoPreview} alt="Receipt" className="w-full h-32 object-cover rounded-xl"/><button onClick={()=>setPhotoPreview(null)} className="absolute top-2 right-2 bg-black/50 text-white w-8 h-8 rounded-full">✕</button></div>:
