@@ -250,9 +250,25 @@ function App(){
 }
 
 function Dashboard({purchases,expenses,dishes,rowCounts}){
-  const today=new Date().toISOString().split('T')[0];
-  const tp=purchases.filter(p=>p.PurchaseDate===today);
-  const te=expenses.filter(e=>e.Date===today);
+  // Use local date, not UTC
+  const todayDate=new Date();
+  const today=todayDate.getFullYear()+'-'+String(todayDate.getMonth()+1).padStart(2,'0')+'-'+String(todayDate.getDate()).padStart(2,'0');
+  
+  // Helper to normalize date to YYYY-MM-DD
+  const normalizeDate=(d)=>{
+    if(!d)return '';
+    if(typeof d==='string'){
+      // Handle ISO string or date string
+      return d.split('T')[0];
+    }
+    if(d instanceof Date || (d && d.getFullYear)){
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+    return String(d).split('T')[0];
+  };
+  
+  const tp=purchases.filter(p=>normalizeDate(p.PurchaseDate)===today);
+  const te=expenses.filter(e=>normalizeDate(e.Date)===today);
   const tpT=tp.reduce((s,p)=>s+(parseFloat(p.Price)||0),0);
   const teT=te.reduce((s,e)=>s+(parseFloat(e.Amount)||0),0);
   const week=new Date();week.setDate(week.getDate()-7);
