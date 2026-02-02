@@ -1906,6 +1906,11 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
   const[activeSessions,setActiveSessions]=useState([]);
   const[loadingSessions,setLoadingSessions]=useState(false);
   
+  // Reset data state
+  const[resetBranch,setResetBranch]=useState('ALL');
+  const[resetOptions,setResetOptions]=useState({purchases:true,expenses:true,counters:true,sessions:false});
+  const[resetting,setResetting]=useState(false);
+  
   // Icon picker state
   const[showIconPicker,setShowIconPicker]=useState(null); // {type:'ingredient'|'expense', category:string}
   const[categoryIcons,setCategoryIcons]=useState({});
@@ -1996,6 +2001,52 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
   const loadActiveSessions=async()=>{setLoadingSessions(true);try{const r=await api(apiUrl,'getAllActiveSessions');setActiveSessions(r.sessions||[])}catch(e){console.error(e)}finally{setLoadingSessions(false)}};
   const forceLogout=async(sessionID,deviceName)=>{if(!confirm(`Force logout device "${deviceName}"?`))return;try{await api(apiUrl,'logoutSession',{sessionID});showToast('Device logged out');loadActiveSessions()}catch(e){showToast(e.message,'error')}};
   const clearAllSessions=async(branchCode)=>{if(!confirm(`Logout ALL devices from ${branchCode}?`))return;try{await api(apiUrl,'clearBranchSessions',{branchCode});showToast('All sessions cleared');loadActiveSessions()}catch(e){showToast(e.message,'error')}};
+  
+  const doReset=async()=>{
+    const branchName=resetBranch==='ALL'?'ALL BRANCHES':branchList.find(b=>b.BranchCode===resetBranch)?.BranchName||resetBranch;
+    const what=[];
+    if(resetOptions.purchases)what.push('Purchases');
+    if(resetOptions.expenses)what.push('Expenses');
+    if(resetOptions.counters)what.push('ID Counters');
+    if(resetOptions.sessions)what.push('Sessions');
+    
+    if(what.length===0){showToast('Select what to reset','error');return}
+    
+    // First confirm with password
+    const adminPw=prompt(`⚠️ DANGER ZONE!\n\nThis will permanently delete:\n• ${what.join('\n• ')}\n\nFor: ${branchName}\n\nEnter ADMIN PASSWORD to continue:`);
+    if(!adminPw){showToast('Reset cancelled');return}
+    
+    // Verify admin password
+    try{
+      const verify=await api(apiUrl,'verifyAdminPassword',{password:adminPw});
+      if(!verify.success){
+        showToast('Invalid admin password','error');
+        return;
+      }
+    }catch(e){
+      showToast('Password verification failed','error');
+      return;
+    }
+    
+    // Second confirm by typing RESET
+    const confirmType=prompt('Password verified.\n\nType "RESET" to confirm deletion:');
+    if(confirmType!=='RESET'){showToast('Reset cancelled');return}
+    
+    setResetting(true);
+    try{
+      const r=await api(apiUrl,'resetAllData',{branchCode:resetBranch,options:JSON.stringify(resetOptions)});
+      let msg='Reset complete! ';
+      if(r.results?.purchases)msg+=`Purchases: ${r.results.purchases.deleted||0} deleted. `;
+      if(r.results?.expenses)msg+=`Expenses: ${r.results.expenses.deleted||0} deleted. `;
+      if(r.results?.counters)msg+=`Counters reset. `;
+      if(r.results?.sessions)msg+=`Sessions cleared.`;
+      showToast(msg);
+      loadAll();
+      loadActiveSessions();
+    }catch(e){showToast(e.message,'error')}
+    finally{setResetting(false)}
+  };
+  
   const saveBranch=async()=>{if(!editBranch)return;setSaving(true);try{await api(apiUrl,'updateBranch',{branchCode:editBranch.BranchCode,data:JSON.stringify({BranchName:editBranch.BranchName,Password:editBranch.Password,Active:editBranch.Active})});showToast('Saved!');setEditBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
   const addBranch=async()=>{if(!newBranch?.BranchCode||!newBranch?.BranchName||!newBranch?.Password){showToast('Fill all fields','error');return}setSaving(true);try{await api(apiUrl,'addBranch',{data:JSON.stringify(newBranch)});showToast('Added!');setNewBranch(null);loadBranches();loadAll()}catch(e){showToast(e.message,'error')}finally{setSaving(false)}};
   const deleteBranch=async(code)=>{if(!confirm('Delete this branch?'))return;try{await api(apiUrl,'deleteBranch',{branchCode:code});showToast('Deleted!');loadBranches();loadAll()}catch(e){showToast(e.message,'error')}};
@@ -2074,25 +2125,31 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
         {activeSessions.length===0?<p className="text-gray-400 text-sm">No active sessions</p>:
           <div className="space-y-2">
             {/* Group by branch */}
-            {[...new Set(activeSessions.map(s=>s.BranchCode))].sort().map(branch=>{
-              const branchSessions=activeSessions.filter(s=>s.BranchCode===branch);
+            {[...new Set(activeSessions.map(s=>s.BranchCode))].sort().map(branchCode=>{
+              const branchSessions=activeSessions.filter(s=>s.BranchCode===branchCode);
+              const branchInfo=branchList.find(b=>b.BranchCode===branchCode);
+              const branchName=branchInfo?.BranchName||branchCode;
               return(
-                <div key={branch} className="border rounded-xl p-3">
+                <div key={branchCode} className="border rounded-xl p-3">
                   <div className="flex justify-between items-center mb-2">
-                    <span className="font-medium text-gray-700">{branch}</span>
+                    <div>
+                      <span className="font-medium text-gray-700">{branchName}</span>
+                      <span className="text-xs text-gray-400 ml-2">({branchCode})</span>
+                    </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{branchSessions.length} device{branchSessions.length>1?'s':''}</span>
-                      <button onClick={()=>clearAllSessions(branch)} className="text-xs text-red-500 hover:text-red-700">Logout All</button>
+                      <button onClick={()=>clearAllSessions(branchCode)} className="text-xs text-red-500 hover:text-red-700">Logout All</button>
                     </div>
                   </div>
                   {branchSessions.map(s=>
                     <div key={s.SessionID} className="flex items-center justify-between py-2 border-t text-sm">
                       <div>
-                        <span className="font-medium">{s.DeviceName}</span>
-                        <span className="text-gray-400 ml-2">({s.Browser})</span>
-                        <p className="text-xs text-gray-400">Last active: {new Date(s.LastActive).toLocaleString('en-PH')}</p>
+                        <span className="font-medium">{s.DeviceName||'Unknown Device'}</span>
+                        <span className="text-gray-400 ml-2">({s.Browser||'Unknown'})</span>
+                        <p className="text-xs text-gray-400">Login: {s.LoginTime?new Date(s.LoginTime).toLocaleString('en-PH'):'-'}</p>
+                        <p className="text-xs text-gray-400">Last active: {s.LastActive?new Date(s.LastActive).toLocaleString('en-PH'):'-'}</p>
                       </div>
-                      <button onClick={()=>forceLogout(s.SessionID,s.DeviceName)} className="text-red-500 text-xs px-2 py-1 hover:bg-red-50 rounded">🚪 Logout</button>
+                      <button onClick={()=>forceLogout(s.SessionID,s.DeviceName||'device')} className="text-red-500 text-xs px-2 py-1 hover:bg-red-50 rounded">🚪 Logout</button>
                     </div>
                   )}
                 </div>
@@ -2112,6 +2169,43 @@ function Settings({apiUrl,setApiUrl,setReady,settings,branches,rowCounts,showToa
         {archPrev&&<div className="p-3 bg-amber-50 rounded-xl mb-3"><p className="text-sm text-amber-800"><strong>{archPrev.rowsToArchive.toLocaleString()}</strong> rows will be deleted{archPrev.dateRange?.start&&<span className="block text-xs mt-1">{archPrev.dateRange.start} to {archPrev.dateRange.end}</span>}</p></div>}
         {archPrev&&archPrev.rowsToArchive>0&&<button onClick={doArchive} disabled={archiving} className="btn w-full text-white" style={{background:'#dc2626'}}>{archiving?'Archiving...':`🗑️ Delete ${archPrev.rowsToArchive} Rows`}</button>}
         {archLog.length>0&&<div className="mt-4 pt-4 border-t"><p className="text-xs font-semibold text-gray-500 mb-2">History</p>{archLog.slice(0,5).map((l,i)=><p key={i} className="text-xs text-gray-500">{fmtDate(l.ArchiveDate)}: {l.DataType} - {l.RowsArchived} rows</p>)}</div>}
+      </div>
+
+      {/* Reset Data - Danger Zone */}
+      <div className="card p-4 border-2 border-red-200">
+        <h3 className="font-semibold text-red-600 mb-3">⚠️ Reset Data (Danger Zone)</h3>
+        <p className="text-xs text-gray-500 mb-3">Permanently delete purchases, expenses, and reset counters. Requires ADMIN password from BranchPasswords sheet.</p>
+        
+        <div className="mb-3">
+          <label className="lbl">Branch</label>
+          <select value={resetBranch} onChange={e=>setResetBranch(e.target.value)} className="inp">
+            <option value="ALL">🌐 ALL BRANCHES</option>
+            {branchList.map(b=><option key={b.BranchCode} value={b.BranchCode}>{b.BranchName} ({b.BranchCode})</option>)}
+          </select>
+        </div>
+        
+        <div className="space-y-2 mb-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={resetOptions.purchases} onChange={e=>setResetOptions({...resetOptions,purchases:e.target.checked})}/>
+            <span className="text-sm">🛒 Purchases ({rowCounts.Purchases?.toLocaleString()||0} rows)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={resetOptions.expenses} onChange={e=>setResetOptions({...resetOptions,expenses:e.target.checked})}/>
+            <span className="text-sm">💰 Expenses ({rowCounts.Expenses?.toLocaleString()||0} rows)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={resetOptions.counters} onChange={e=>setResetOptions({...resetOptions,counters:e.target.checked})}/>
+            <span className="text-sm">🔢 ID Counters (reset to 0)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={resetOptions.sessions} onChange={e=>setResetOptions({...resetOptions,sessions:e.target.checked})}/>
+            <span className="text-sm">📱 Active Sessions (force logout)</span>
+          </label>
+        </div>
+        
+        <button onClick={doReset} disabled={resetting} className="btn w-full text-white" style={{background:'#dc2626'}}>
+          {resetting?'Resetting...':'🗑️ Reset Selected Data'}
+        </button>
       </div>
 
       <div className="card p-4">
