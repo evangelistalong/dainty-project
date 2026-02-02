@@ -555,6 +555,9 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
   const[search,setSearch]=useState('');
   const[sortBy,setSortBy]=useState('date');
   const[sortDir,setSortDir]=useState('desc');
+  const[selectedPurchase,setSelectedPurchase]=useState(null);
+  const[editMode,setEditMode]=useState(false);
+  const[editForm,setEditForm]=useState({});
   useEffect(()=>{if(branch!=='All')setSelBr(branch)},[branch]);
 
   const addItem=()=>setForm({...form,items:[...form.items,{ItemName:'',Qty:'',Unit:'kg',Price:''}]});
@@ -574,8 +577,47 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
     }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
   };
 
+  const startEdit=()=>{
+    setEditForm({
+      ItemName:selectedPurchase.ItemName||'',
+      Qty:selectedPurchase.Qty||'',
+      Unit:selectedPurchase.Unit||'kg',
+      Container:selectedPurchase.ContainerType||selectedPurchase.Container||'',
+      Price:selectedPurchase.Price||'',
+      Supplier:selectedPurchase.Supplier||'',
+      PurchaseDate:selectedPurchase.PurchaseDate?selectedPurchase.PurchaseDate.split('T')[0]:''
+    });
+    setEditMode(true);
+  };
+
+  const saveEdit=async()=>{
+    if(!editForm.ItemName||!editForm.Qty||!editForm.Price){showToast('Fill required fields','error');return}
+    setSaving(true);
+    try{
+      await api(apiUrl,'updatePurchase',{
+        uniqueId:selectedPurchase.UniqueID,
+        data:editForm
+      });
+      showToast('Updated!');
+      setEditMode(false);
+      setSelectedPurchase(null);
+      loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
+  const deletePurchase=async()=>{
+    if(!confirm('Delete this purchase? This cannot be undone.'))return;
+    setSaving(true);
+    try{
+      await api(apiUrl,'deletePurchase',{uniqueId:selectedPurchase.UniqueID});
+      showToast('Deleted!');
+      setSelectedPurchase(null);
+      loadTx();
+    }catch(e){showToast(e.message,'error')}finally{setSaving(false)}
+  };
+
   const total=form.items.reduce((s,i)=>s+(parseFloat(i.Price)||0),0);
-  const units=(settings.Units||'kg,g,L,ml,pcs').split(',');
+  const units=(settings.Units||'kg,g,L,ml,pcs,bottle,pack,can,box,bag,bundle,dozen').split(',');
   
   // Get unique categories
   const categories=['All',...new Set(purchases.map(p=>p.Category).filter(Boolean))];
@@ -598,6 +640,162 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
 
   return(
     <div className="space-y-4 fade">
+      {/* Purchase Detail Modal */}
+      {selectedPurchase&&<div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>{setSelectedPurchase(null);setEditMode(false)}}>
+        <div className="bg-white rounded-2xl p-4 max-w-md w-full fade max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-gray-800">{editMode?'✏️ Edit Purchase':'🛒 Purchase Details'}</h3>
+            <button onClick={()=>{setSelectedPurchase(null);setEditMode(false)}} className="text-2xl text-gray-400">✕</button>
+          </div>
+          
+          {editMode?(
+            <div className="space-y-3">
+              <div>
+                <label className="lbl">Item Name *</label>
+                <input value={editForm.ItemName} onChange={e=>setEditForm({...editForm,ItemName:e.target.value})} className="inp"/>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="lbl">Qty *</label>
+                  <input type="number" value={editForm.Qty} onChange={e=>setEditForm({...editForm,Qty:e.target.value})} className="inp" step="0.01"/>
+                </div>
+                <div>
+                  <label className="lbl">Container</label>
+                  <select value={editForm.Container} onChange={e=>setEditForm({...editForm,Container:e.target.value})} className="inp">
+                    <option value="">-- None --</option>
+                    <option value="Bottle">Bottle</option>
+                    <option value="Bag">Bag</option>
+                    <option value="Box">Box</option>
+                    <option value="Can">Can</option>
+                    <option value="Pack">Pack</option>
+                    <option value="Bundle">Bundle</option>
+                    <option value="Sack">Sack</option>
+                    <option value="Tray">Tray</option>
+                    <option value="Piece">Piece</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="lbl">Base Unit</label>
+                  <select value={editForm.Unit} onChange={e=>setEditForm({...editForm,Unit:e.target.value})} className="inp">
+                    {units.map(u=><option key={u} value={u.trim()}>{u.trim()}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="lbl">Total Price *</label>
+                  <input type="number" value={editForm.Price} onChange={e=>setEditForm({...editForm,Price:e.target.value})} className="inp" step="0.01"/>
+                </div>
+              </div>
+              <div>
+                <label className="lbl">Supplier</label>
+                <input value={editForm.Supplier} onChange={e=>setEditForm({...editForm,Supplier:e.target.value})} className="inp"/>
+              </div>
+              <div>
+                <label className="lbl">Date</label>
+                <input type="date" value={editForm.PurchaseDate} onChange={e=>setEditForm({...editForm,PurchaseDate:e.target.value})} className="inp"/>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={()=>setEditMode(false)} className="btn btn-s flex-1">Cancel</button>
+                <button onClick={saveEdit} disabled={saving} className="btn btn-p flex-1">{saving?'Saving...':'💾 Save'}</button>
+              </div>
+            </div>
+          ):(
+            <div className="space-y-3">
+              {/* Item Name */}
+              <div className="p-3 bg-red-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Item</p>
+                <p className="text-lg font-bold text-red-800">{selectedPurchase.ItemName}</p>
+              </div>
+              
+              {/* Get container with fallbacks */}
+              {(()=>{
+                const container=selectedPurchase.ContainerType||selectedPurchase.Container||selectedPurchase.container||'';
+                const displayUnit=container||selectedPurchase.Unit||'unit';
+                return <>
+                  {/* Price & Quantity */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3 bg-gray-50 rounded-xl">
+                      <p className="text-xs text-gray-500 mb-1">Total Price</p>
+                      <p className="text-xl font-bold text-red-700">{fmt(selectedPurchase.Price)}</p>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded-xl">
+                      <p className="text-xs text-gray-500 mb-1">Quantity</p>
+                      <p className="text-xl font-bold text-gray-800">{selectedPurchase.Qty} {displayUnit}</p>
+                    </div>
+                  </div>
+                  
+                  {/* Price Per Unit (actual) */}
+                  <div className="p-3 bg-blue-50 rounded-xl">
+                    <p className="text-xs text-gray-500 mb-1">Price per {displayUnit}</p>
+                    <p className="text-lg font-bold text-blue-700">₱{((parseFloat(selectedPurchase.Price)||0)/(parseFloat(selectedPurchase.Qty)||1)).toFixed(2)} / {displayUnit}</p>
+                  </div>
+                </>;
+              })()}
+              
+              {/* Computed Unit Price (per gram/ml) */}
+              {selectedPurchase.UnitPrice&&<div className="p-3 bg-green-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">Computed Price (for costing)</p>
+                <p className="text-lg font-bold text-green-700">₱{(parseFloat(selectedPurchase.UnitPrice)||0).toFixed(4)} / {selectedPurchase.BaseUnit||'g'}</p>
+              </div>}
+              
+              {/* Details Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📅 Date</p>
+                  <p className="font-medium text-gray-800">{fmtDate(selectedPurchase.PurchaseDate)}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🏪 Branch</p>
+                  <p className="font-medium text-gray-800">{selectedPurchase.BranchCode||selectedPurchase.Branch||'-'}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📦 Category</p>
+                  <p className="font-medium text-gray-800">{selectedPurchase.Category||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📦 Container</p>
+                  <p className="font-medium text-gray-800">{selectedPurchase.ContainerType||selectedPurchase.Container||'-'}</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">🚚 Supplier</p>
+                  <p className="font-medium text-gray-800">{selectedPurchase.Supplier||'-'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-xl">
+                  <p className="text-xs text-gray-500 mb-1">📏 Base Unit</p>
+                  <p className="font-medium text-gray-800">{selectedPurchase.Unit||'-'}</p>
+                </div>
+              </div>
+              
+              {/* SKU Info */}
+              {selectedPurchase.MasterSKU&&<div className="p-3 bg-purple-50 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">🔑 SKU</p>
+                <p className="font-mono text-sm text-purple-800">{selectedPurchase.MasterSKU}</p>
+              </div>}
+              
+              {/* UniqueID */}
+              <div className="p-3 bg-gray-100 rounded-xl">
+                <p className="text-xs text-gray-500 mb-1">ID</p>
+                <p className="font-mono text-xs text-gray-600 break-all">{selectedPurchase.UniqueID||'-'}</p>
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="flex gap-2 pt-2">
+                <button onClick={deletePurchase} disabled={saving} className="btn bg-gray-200 text-gray-700 flex-1">🗑️ Delete</button>
+                <button onClick={startEdit} className="btn btn-s flex-1">✏️ Edit</button>
+                <button onClick={()=>setSelectedPurchase(null)} className="btn btn-p flex-1">Close</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>}
+      
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-bold text-gray-800">🛒 Purchases</h2>
         <div className="flex gap-2">
@@ -651,7 +849,11 @@ function Purchases({apiUrl,branch,branches,settings,purchases,showToast,loadTx})
         </div>
         <div className="max-h-96 overflow-y-auto" key={search+filterCat+sortBy+sortDir}>
           {filtered.length===0?<p className="p-8 text-center text-gray-400">No purchases</p>:
-            filtered.slice(0,50).map((p,idx)=><div key={p.UniqueID+'_'+idx} className="p-3 border-b flex items-center"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {p.Unit} • {p.Category||'No category'} • {p.BranchCode}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p><p className="text-xs text-gray-400">{fmtDate(p.PurchaseDate)}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span></div>)}
+            filtered.slice(0,50).map((p,idx)=>{
+              const container=p.ContainerType||p.Container||p.container||'';
+              const displayUnit=container||p.Unit||'';
+              return <div key={p.UniqueID+'_'+idx} onClick={()=>setSelectedPurchase(p)} className="p-3 border-b flex items-center cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition"><div className="flex-1 min-w-0"><p className="font-medium text-sm">{p.ItemName}</p><p className="text-xs text-gray-500">{p.Qty} {displayUnit} • {p.Category||'No category'} • {p.BranchCode}</p><p className="text-xs text-green-600 font-medium">₱{(parseFloat(p.UnitPrice)||0).toFixed(4)}/{p.BaseUnit||'g'}</p><p className="text-xs text-gray-400">{fmtDate(p.PurchaseDate)}</p></div><span className="font-bold text-red-700">{fmt(p.Price)}</span><span className="ml-2 text-gray-400">›</span></div>
+            })}
         </div>
       </div>
     </div>
