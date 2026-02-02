@@ -225,7 +225,7 @@ function App(){
       </header>
 
       <nav className="bg-white border-b sticky top-[124px] z-30 flex overflow-x-auto">
-        {[{id:'dashboard',icon:'📊',l:'Dashboard'},{id:'purchases',icon:'🛒',l:'Purchases'},{id:'expenses',icon:'💰',l:'Expenses'},{id:'ingredients',icon:'🥬',l:'Ingredients'},{id:'dishes',icon:'🍳',l:'Dishes'},{id:'costing',icon:'💵',l:'Costing'},{id:'reports',icon:'📈',l:'Reports'},{id:'settings',icon:'⚙️',l:'Settings'}].map(t=>
+        {[{id:'dashboard',icon:'📊',l:'Dashboard'},{id:'ai',icon:'🤖',l:'AI'},{id:'purchases',icon:'🛒',l:'Purchases'},{id:'expenses',icon:'💰',l:'Expenses'},{id:'ingredients',icon:'🥬',l:'Ingredients'},{id:'dishes',icon:'🍳',l:'Dishes'},{id:'costing',icon:'💵',l:'Costing'},{id:'reports',icon:'📈',l:'Reports'},{id:'settings',icon:'⚙️',l:'Settings'}].map(t=>
           <button key={t.id} onClick={()=>setTab(t.id)} className={`flex-none px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 ${tab===t.id?'bg-red-50 text-red-700 border-red-600':'bg-white text-gray-500 border-transparent'}`}>{t.icon} {t.l}</button>
         )}
       </nav>
@@ -236,6 +236,7 @@ function App(){
 
       <main className="p-4">
         {tab==='dashboard'&&<Dashboard purchases={purchases} expenses={expenses} dishes={dishes} rowCounts={rowCounts}/>}
+        {tab==='ai'&&<AIAssistant apiUrl={apiUrl} purchases={purchases} expenses={expenses} ingredients={ingredients} dishes={dishes} showToast={showToast}/>}
         {tab==='purchases'&&<Purchases apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} purchases={purchases} showToast={showToast} loadTx={loadTx}/>}
         {tab==='expenses'&&<Expenses apiUrl={apiUrl} branch={branch} branches={branches} settings={settings} expenses={expenses} showToast={showToast} loadTx={loadTx}/>}
         {tab==='ingredients'&&<Ingredients apiUrl={apiUrl} ingredients={ingredients} ingCats={ingCats} settings={settings} purchases={purchases} dishes={dishes} showToast={showToast} loadAll={loadAll}/>}
@@ -298,6 +299,247 @@ function Dashboard({purchases,expenses,dishes,rowCounts}){
           {tp.length===0&&te.length===0&&<p className="p-8 text-center text-gray-400">No activity today</p>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ===== AI ASSISTANT =====
+function AIAssistant({apiUrl,purchases,expenses,ingredients,dishes,showToast}){
+  const[aiTab,setAiTab]=useState('chat');
+  const[question,setQuestion]=useState('');
+  const[chatHistory,setChatHistory]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[insights,setInsights]=useState(null);
+  const[priceAlerts,setPriceAlerts]=useState(null);
+  const[alertThreshold,setAlertThreshold]=useState(15);
+  
+  const askQuestion=async()=>{
+    if(!question.trim())return;
+    setLoading(true);
+    const q=question;
+    setQuestion('');
+    setChatHistory(prev=>[...prev,{role:'user',text:q}]);
+    
+    try{
+      const r=await api(apiUrl,'askAI',{question:q});
+      if(r.error){
+        setChatHistory(prev=>[...prev,{role:'ai',text:'❌ Error: '+r.error}]);
+      }else{
+        setChatHistory(prev=>[...prev,{role:'ai',text:r.answer}]);
+      }
+    }catch(e){
+      setChatHistory(prev=>[...prev,{role:'ai',text:'❌ Error: '+e.message}]);
+    }finally{
+      setLoading(false);
+    }
+  };
+  
+  const loadInsights=async()=>{
+    setLoading(true);
+    setInsights(null);
+    try{
+      const r=await api(apiUrl,'generateInsights',{});
+      if(r.error){
+        showToast(r.error,'error');
+      }else{
+        setInsights(r.insights||[]);
+      }
+    }catch(e){
+      showToast(e.message,'error');
+    }finally{
+      setLoading(false);
+    }
+  };
+  
+  const loadPriceAlerts=async()=>{
+    setLoading(true);
+    setPriceAlerts(null);
+    try{
+      const r=await api(apiUrl,'getPriceAlerts',{threshold:alertThreshold});
+      if(r.error){
+        showToast(r.error,'error');
+      }else{
+        setPriceAlerts(r);
+      }
+    }catch(e){
+      showToast(e.message,'error');
+    }finally{
+      setLoading(false);
+    }
+  };
+  
+  const sampleQuestions=[
+    "What did we spend on meat this month?",
+    "Which branch has the highest expenses?",
+    "Compare this month vs last month spending",
+    "What are our top 5 purchased ingredients?",
+    "Show me seafood price trends",
+    "Which supplier do we use most?"
+  ];
+  
+  const fmt=n=>n?'₱'+parseFloat(n).toLocaleString(undefined,{maximumFractionDigits:0}):'₱0';
+  
+  return(
+    <div className="space-y-4">
+      {/* AI Tab Selector */}
+      <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+        <button onClick={()=>setAiTab('chat')} className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${aiTab==='chat'?'bg-white shadow text-purple-700':'text-gray-600'}`}>💬 Ask AI</button>
+        <button onClick={()=>setAiTab('insights')} className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${aiTab==='insights'?'bg-white shadow text-purple-700':'text-gray-600'}`}>📊 Insights</button>
+        <button onClick={()=>setAiTab('alerts')} className={`flex-1 py-2 px-4 rounded-lg font-medium transition ${aiTab==='alerts'?'bg-white shadow text-purple-700':'text-gray-600'}`}>🔔 Price Alerts</button>
+      </div>
+      
+      {/* Chat Tab */}
+      {aiTab==='chat'&&<div className="space-y-4">
+        <div className="card p-4">
+          <h3 className="font-bold text-lg mb-2">💬 Ask About Your Data</h3>
+          <p className="text-sm text-gray-500 mb-4">Ask any question about purchases, expenses, ingredients, or business performance.</p>
+          
+          {/* Sample Questions */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            {sampleQuestions.map((sq,i)=>(
+              <button key={i} onClick={()=>setQuestion(sq)} className="text-xs bg-purple-50 text-purple-700 px-3 py-1 rounded-full hover:bg-purple-100">{sq}</button>
+            ))}
+          </div>
+          
+          {/* Chat Input */}
+          <div className="flex gap-2">
+            <input value={question} onChange={e=>setQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&askQuestion()} placeholder="Type your question..." className="inp flex-1" disabled={loading}/>
+            <button onClick={askQuestion} disabled={loading||!question.trim()} className="btn btn-p px-6">{loading?'...':'Ask'}</button>
+          </div>
+        </div>
+        
+        {/* Chat History */}
+        {chatHistory.length>0&&<div className="card p-4 space-y-3 max-h-96 overflow-y-auto">
+          {chatHistory.map((msg,i)=>(
+            <div key={i} className={`p-3 rounded-xl ${msg.role==='user'?'bg-purple-100 ml-8':'bg-gray-100 mr-8'}`}>
+              <p className="text-xs text-gray-500 mb-1">{msg.role==='user'?'You':'🤖 AI'}</p>
+              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+            </div>
+          ))}
+          {loading&&<div className="p-3 rounded-xl bg-gray-100 mr-8">
+            <p className="text-xs text-gray-500 mb-1">🤖 AI</p>
+            <div className="flex items-center gap-2"><div className="w-4 h-4 border-2 border-gray-300 border-t-purple-600 rounded-full spin"/>Thinking...</div>
+          </div>}
+        </div>}
+      </div>}
+      
+      {/* Insights Tab */}
+      {aiTab==='insights'&&<div className="space-y-4">
+        <div className="card p-4">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="font-bold text-lg">📊 Smart Insights</h3>
+              <p className="text-sm text-gray-500">AI-generated analysis of your business data</p>
+            </div>
+            <button onClick={loadInsights} disabled={loading} className="btn btn-p">{loading?'Analyzing...':'🔄 Generate'}</button>
+          </div>
+          
+          {loading&&<div className="text-center py-8">
+            <div className="w-12 h-12 border-4 border-purple-200 border-t-purple-600 rounded-full spin mx-auto mb-3"/>
+            <p className="text-gray-500">AI is analyzing your data...</p>
+            <p className="text-xs text-gray-400">This may take 10-15 seconds</p>
+          </div>}
+          
+          {!loading&&insights&&insights.length>0&&<div className="space-y-3">
+            {insights.map((ins,i)=>(
+              <div key={i} className={`p-4 rounded-xl border-l-4 ${ins.type==='alert'?'bg-red-50 border-red-500':ins.type==='warning'?'bg-amber-50 border-amber-500':ins.type==='success'?'bg-green-50 border-green-500':'bg-blue-50 border-blue-500'}`}>
+                <div className="flex items-start gap-3">
+                  <span className="text-2xl">{ins.icon}</span>
+                  <div>
+                    <p className="font-semibold">{ins.title}</p>
+                    <p className="text-sm text-gray-600 mt-1">{ins.detail}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>}
+          
+          {!loading&&!insights&&<div className="text-center py-8 text-gray-400">
+            <p className="text-4xl mb-2">📊</p>
+            <p>Click "Generate" to get AI-powered insights</p>
+          </div>}
+        </div>
+      </div>}
+      
+      {/* Forecast Tab */}
+      {aiTab==='alerts'&&<div className="space-y-4">
+        <div className="card p-4">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="font-bold text-lg">🔔 Price Alerts</h3>
+              <p className="text-sm text-gray-500">Detect unusual price changes vs historical average</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select value={alertThreshold} onChange={e=>setAlertThreshold(parseInt(e.target.value))} className="inp w-auto">
+                <option value={10}>±10% change</option>
+                <option value={15}>±15% change</option>
+                <option value={20}>±20% change</option>
+                <option value={25}>±25% change</option>
+              </select>
+              <button onClick={loadPriceAlerts} disabled={loading} className="btn btn-p">{loading?'...':'🔍 Check Prices'}</button>
+            </div>
+          </div>
+          
+          {loading&&<div className="text-center py-8">
+            <div className="w-12 h-12 border-4 border-purple-200 border-t-purple-600 rounded-full spin mx-auto mb-3"/>
+            <p className="text-gray-500">Analyzing price history...</p>
+          </div>}
+          
+          {!loading&&priceAlerts&&<div className="space-y-4">
+            {/* Summary */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-gray-100 rounded-xl p-3 text-center">
+                <p className="text-2xl font-bold">{priceAlerts.totalChecked}</p>
+                <p className="text-xs text-gray-500">Items Checked</p>
+              </div>
+              <div className="bg-red-100 rounded-xl p-3 text-center">
+                <p className="text-2xl font-bold text-red-600">{priceAlerts.alerts?.filter(a=>a.type==='high').length||0}</p>
+                <p className="text-xs text-red-600">Price Increases</p>
+              </div>
+              <div className="bg-green-100 rounded-xl p-3 text-center">
+                <p className="text-2xl font-bold text-green-600">{priceAlerts.alerts?.filter(a=>a.type==='low').length||0}</p>
+                <p className="text-xs text-green-600">Price Decreases</p>
+              </div>
+            </div>
+            
+            {/* Alerts List */}
+            {priceAlerts.alerts&&priceAlerts.alerts.length>0?<div className="card overflow-hidden">
+              <div className="p-3 bg-gray-50 border-b font-semibold text-sm flex">
+                <span className="flex-1">Item</span>
+                <span className="w-24 text-right">Avg Price</span>
+                <span className="w-24 text-right">Recent</span>
+                <span className="w-20 text-center">Change</span>
+              </div>
+              <div className="max-h-96 overflow-y-auto">
+                {priceAlerts.alerts.map((alert,i)=>(
+                  <div key={i} className={`p-3 border-b flex items-center text-sm ${alert.type==='high'?'bg-red-50':'bg-green-50'}`}>
+                    <div className="flex-1">
+                      <p className="font-medium">{alert.name}</p>
+                      <p className="text-xs text-gray-500">{alert.category} • {alert.supplier||'Unknown'} • {alert.branch}</p>
+                      <p className="text-xs text-gray-400">{alert.date}</p>
+                    </div>
+                    <span className="w-24 text-right text-gray-600">₱{alert.avgPrice?.toFixed(2)}/{alert.unit}</span>
+                    <span className={`w-24 text-right font-bold ${alert.type==='high'?'text-red-600':'text-green-600'}`}>₱{alert.recentPrice?.toFixed(2)}</span>
+                    <span className={`w-20 text-center text-xs px-2 py-1 rounded-full font-bold ${alert.type==='high'?'bg-red-200 text-red-800':'bg-green-200 text-green-800'}`}>
+                      {alert.type==='high'?'↑':'↓'}{Math.abs(alert.pctChange).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>:<div className="text-center py-8 text-green-600">
+              <p className="text-4xl mb-2">✅</p>
+              <p className="font-medium">No price anomalies detected!</p>
+              <p className="text-sm text-gray-500">All recent purchases are within normal range</p>
+            </div>}
+          </div>}
+          
+          {!loading&&!priceAlerts&&<div className="text-center py-8 text-gray-400">
+            <p className="text-4xl mb-2">🔔</p>
+            <p>Click "Check Prices" to detect anomalies</p>
+            <p className="text-sm mt-2">Compares last 7 days vs 60-day average</p>
+          </div>}
+        </div>
+      </div>}
     </div>
   );
 }
